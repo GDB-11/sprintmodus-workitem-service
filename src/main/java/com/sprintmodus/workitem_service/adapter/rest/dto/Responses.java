@@ -3,19 +3,26 @@ package com.sprintmodus.workitem_service.adapter.rest.dto;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import com.sprintmodus.workitem_service.application.dto.Responses.AssigneeResponse;
 import com.sprintmodus.workitem_service.application.dto.Responses.ChildResponse;
 import com.sprintmodus.workitem_service.application.dto.Responses.CommentResponse;
+import com.sprintmodus.workitem_service.application.dto.Responses.HistoryEntryResponse;
+import com.sprintmodus.workitem_service.application.dto.Responses.HistoryPage;
 import com.sprintmodus.workitem_service.application.dto.Responses.LinkResponse;
+import com.sprintmodus.workitem_service.application.dto.Responses.NotificationPage;
+import com.sprintmodus.workitem_service.application.dto.Responses.NotificationResponse;
 import com.sprintmodus.workitem_service.application.dto.Responses.WorkItemPage;
 import com.sprintmodus.workitem_service.application.dto.Responses.WorkItemResponse;
 import com.sprintmodus.workitem_service.application.dto.Responses.WorkItemSummary;
 import com.sprintmodus.workitem_service.application.dto.Responses.WorkflowResponse;
 import com.sprintmodus.workitem_service.domain.model.AssignmentRole;
+import com.sprintmodus.workitem_service.domain.model.ChangeType;
 import com.sprintmodus.workitem_service.domain.model.ItemType;
 import com.sprintmodus.workitem_service.domain.model.LinkType;
+import com.sprintmodus.workitem_service.domain.model.NotificationType;
 import com.sprintmodus.workitem_service.domain.model.Priority;
 import com.sprintmodus.workitem_service.domain.model.StatusRef;
 import com.sprintmodus.workitem_service.domain.model.UserRef;
@@ -125,6 +132,54 @@ public final class Responses {
 
 		public static Comment from(CommentResponse response) {
 			return new Comment(response.code(), response.workItemCode(), User.from(response.author()), response.content(), response.createdAt());
+		}
+
+	}
+
+	/** The work item a notification leads to. */
+	public record WorkItemRef(UUID workItemCode, String displayKey, String title) {
+	}
+
+	/** {@code type} is a machine code (e.g. {@code MENTIONED}): the client writes the sentence. */
+	public record Notification(UUID notificationCode, NotificationType type, WorkItemRef workItem, UUID commentCode, User actor, boolean isRead,
+			Instant createdAt, Instant readAt) {
+
+		static Notification from(NotificationResponse response) {
+			return new Notification(response.code(), response.type(), new WorkItemRef(response.workItemCode(), response.workItemKey(), response.workItemTitle()),
+					response.commentCode(), User.from(response.actor()), response.read(), response.createdAt(), response.readAt());
+		}
+
+	}
+
+	public record NotificationList(List<Notification> items, long total, int page, int size) {
+
+		public static NotificationList from(NotificationPage page) {
+			return new NotificationList(page.items().stream().map(Notification::from).toList(), page.total(), page.page(), page.size());
+		}
+
+	}
+
+	public record UnreadCount(int count) {
+	}
+
+	public record UserCount(int count) {
+	}
+
+	/** One change in a work item's history. {@code oldValue}/{@code newValue} are what was stored (a status change stores status codes); {@code additionalData} adds names the client can show. */
+	public record HistoryEntry(ChangeType changeType, String field, String oldValue, String newValue, Map<String, String> additionalData,
+			User changedBy, Instant createdAt) {
+
+		static HistoryEntry from(HistoryEntryResponse entry) {
+			return new HistoryEntry(entry.type(), entry.field(), entry.oldValue(), entry.newValue(), entry.additionalData(),
+					User.from(entry.changedBy()), entry.createdAt());
+		}
+
+	}
+
+	public record History(List<HistoryEntry> items, long total, int page, int size) {
+
+		public static History from(HistoryPage page) {
+			return new History(page.items().stream().map(HistoryEntry::from).toList(), page.total(), page.page(), page.size());
 		}
 
 	}

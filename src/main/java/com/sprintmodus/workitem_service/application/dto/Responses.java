@@ -3,13 +3,18 @@ package com.sprintmodus.workitem_service.application.dto;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import com.sprintmodus.workitem_service.domain.model.Assignment;
 import com.sprintmodus.workitem_service.domain.model.AssignmentRole;
+import com.sprintmodus.workitem_service.domain.model.ChangeType;
 import com.sprintmodus.workitem_service.domain.model.Comment;
+import com.sprintmodus.workitem_service.domain.model.HistoryEntry;
 import com.sprintmodus.workitem_service.domain.model.ItemType;
 import com.sprintmodus.workitem_service.domain.model.Link;
+import com.sprintmodus.workitem_service.domain.model.Notification;
+import com.sprintmodus.workitem_service.domain.model.NotificationType;
 import com.sprintmodus.workitem_service.domain.model.LinkType;
 import com.sprintmodus.workitem_service.domain.model.Priority;
 import com.sprintmodus.workitem_service.domain.model.StatusRef;
@@ -103,6 +108,38 @@ public final class Responses {
 			return new CommentResponse(comment.code(), comment.workItemCode(), comment.author(), comment.content(), comment.createdAt());
 		}
 
+	}
+
+	/** A notification as its recipient reads it; see {@link Notification}. */
+	public record NotificationResponse(UUID code, NotificationType type, UUID workItemCode, String workItemKey, String workItemTitle,
+			UUID commentCode, UserRef actor, Instant createdAt, Instant readAt) {
+
+		public static NotificationResponse from(Notification notification) {
+			return new NotificationResponse(notification.code(), notification.type(), notification.workItemCode(), notification.workItemKey(),
+					notification.workItemTitle(), notification.commentCode(), notification.actor(), notification.createdAt(), notification.readAt());
+		}
+
+		public boolean read() {
+			return readAt != null;
+		}
+
+	}
+
+	public record NotificationPage(List<NotificationResponse> items, long total, int page, int size) {
+	}
+
+	/** One change in a work item's history; see {@link HistoryEntry}. */
+	public record HistoryEntryResponse(ChangeType type, String field, String oldValue, String newValue, Map<String, String> additionalData,
+			UserRef changedBy, Instant createdAt) {
+
+		public static HistoryEntryResponse from(HistoryEntry entry) {
+			return new HistoryEntryResponse(entry.type(), entry.field(), entry.oldValue(), entry.newValue(), entry.additionalData(),
+					entry.changedBy(), entry.createdAt());
+		}
+
+	}
+
+	public record HistoryPage(List<HistoryEntryResponse> items, long total, int page, int size) {
 	}
 
 	public record WorkflowResponse(ItemType itemType, List<Workflow.WorkflowStatus> statuses, List<Workflow.WorkflowTransition> transitions) {

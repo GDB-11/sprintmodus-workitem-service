@@ -1,0 +1,11 @@
+# Only what the build needs goes into the build context
+.git
+.gitattributes
+.gitignore
+.github
+.vscode
+.idea
+target
+HELP.md
+README.md
+*.iml

@@ -12,17 +12,19 @@ import com.sprintmodus.workitem_service.application.error.AssignmentError.Alread
 import com.sprintmodus.workitem_service.application.error.AssignmentError.InvalidAssignment;
 import com.sprintmodus.workitem_service.application.error.AssignmentError.UserNotFound;
 import com.sprintmodus.workitem_service.application.error.AssignmentError.WorkItemNotFound;
+import com.sprintmodus.workitem_service.application.port.external.DomainEventPublisher;
 import com.sprintmodus.workitem_service.application.port.external.TransactionRunner;
 import com.sprintmodus.workitem_service.application.port.persistence.AssignmentRepository;
 import com.sprintmodus.workitem_service.application.port.persistence.AuditRepository;
 import com.sprintmodus.workitem_service.application.port.persistence.WorkItemRepository;
+import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemAssigned;
 import com.sprintmodus.workitem_service.domain.model.Assignment;
 import com.sprintmodus.workitem_service.domain.model.AuditEntry;
 import com.sprintmodus.workitem_service.domain.model.ChangeType;
 
 /**
  * Assigns a user to a work item in a role (DEV, QA, PO, PM or SCRUM_MASTER) and records {@code ASSIGNED} with the acting
- * user. One user may hold several roles on an item, each once.
+ * user, then publishes a {@link WorkItemAssigned} event once committed. One user may hold several roles on an item, each once.
  */
 @Service
 public class AssignWorkItemUseCase {
@@ -35,12 +37,15 @@ public class AssignWorkItemUseCase {
 
 	private final TransactionRunner transactions;
 
+	private final DomainEventPublisher events;
+
 	public AssignWorkItemUseCase(WorkItemRepository items, AssignmentRepository assignments, AuditRepository audit,
-			TransactionRunner transactions) {
+			TransactionRunner transactions, DomainEventPublisher events) {
 		this.items = items;
 		this.assignments = assignments;
 		this.audit = audit;
 		this.transactions = transactions;
+		this.events = events;
 	}
 
 	public Result<AssigneeResponse, AssignmentError> execute(Assign command) {
@@ -54,7 +59,7 @@ public class AssignWorkItemUseCase {
 			return Result.failure(new WorkItemNotFound());
 		}
 
-		return transactions.inTransaction(() -> {
+		Result<AssigneeResponse, AssignmentError> result = transactions.inTransaction(() -> {
 			if (assignments.isAssigned(command.workItemCode(), command.userCode(), command.role())) {
 				return Result.<AssigneeResponse, AssignmentError>failure(new AlreadyAssigned());
 			}
@@ -65,9 +70,11 @@ public class AssignWorkItemUseCase {
 						? new WorkItemNotFound() : new UserNotFound());
 			}
 			audit.append(new AuditEntry(command.workItemCode(), command.actor().userCode(), ChangeType.ASSIGNED, "Assignee", null,
-					assignment.label(), Map.of("userCode", assignment.userCode().toString(), "role", assignment.role().name())));
+					assignment.label(), Map.of("userCode", assignment.userCode().toString(), "fullName", assignment.fullName(), "role", assignment.role().name())));
 			return Result.<AssigneeResponse, AssignmentError>success(AssigneeResponse.from(assignment));
 		});
+		return result.tap(assigned -> events.publish(new WorkItemAssigned(command.workItemCode(), command.actor().userCode(),
+				assigned.code(), assigned.userCode(), assigned.role())));
 	}
 
 }

@@ -73,7 +73,7 @@ public class CreateLinkUseCase {
 				return Result.<LinkResponse, LinkError>failure(new TargetNotFound());
 			}
 			audit.append(new AuditEntry(command.workItemCode(), command.actor().userCode(), ChangeType.LINKED, "Link", null,
-					label(link), Map.of("targetCode", link.other().code().toString(), "type", link.type().name())));
+					label(link), Map.of("targetCode", link.other().code().toString(), "targetKey", link.other().displayKey(), "type", link.type().name())));
 			return Result.<LinkResponse, LinkError>success(LinkResponse.from(link));
 		});
 	}

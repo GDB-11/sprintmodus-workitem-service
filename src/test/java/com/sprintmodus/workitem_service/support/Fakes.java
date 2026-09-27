@@ -4,29 +4,38 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
 import com.sprintmodus.common_lib.result.Result;
 import com.sprintmodus.common_lib.result.Unit;
+import com.sprintmodus.workitem_service.application.port.external.DomainEventPublisher;
 import com.sprintmodus.workitem_service.application.port.external.ProjectServiceGateway;
 import com.sprintmodus.workitem_service.application.port.external.TransactionRunner;
 import com.sprintmodus.workitem_service.application.port.persistence.AssignmentRepository;
 import com.sprintmodus.workitem_service.application.port.persistence.AuditRepository;
 import com.sprintmodus.workitem_service.application.port.persistence.CommentRepository;
 import com.sprintmodus.workitem_service.application.port.persistence.LinkRepository;
+import com.sprintmodus.workitem_service.application.port.persistence.NotificationRepository;
+import com.sprintmodus.workitem_service.application.port.persistence.UserRepository;
 import com.sprintmodus.workitem_service.application.port.persistence.WorkItemRepository;
 import com.sprintmodus.workitem_service.application.port.persistence.WorkflowRepository;
+import com.sprintmodus.workitem_service.domain.event.DomainEvent;
 import com.sprintmodus.workitem_service.domain.model.Assignment;
 import com.sprintmodus.workitem_service.domain.model.AssignmentRole;
 import com.sprintmodus.workitem_service.domain.model.AuditEntry;
 import com.sprintmodus.workitem_service.domain.model.Comment;
+import com.sprintmodus.workitem_service.domain.model.HistoryEntry;
 import com.sprintmodus.workitem_service.domain.model.ItemType;
 import com.sprintmodus.workitem_service.domain.model.Link;
 import com.sprintmodus.workitem_service.domain.model.LinkType;
+import com.sprintmodus.workitem_service.domain.model.Notification;
+import com.sprintmodus.workitem_service.domain.model.NotificationType;
 import com.sprintmodus.workitem_service.domain.model.UserRef;
 import com.sprintmodus.workitem_service.domain.model.WorkItem;
 import com.sprintmodus.workitem_service.domain.model.Workflow;
@@ -87,9 +96,35 @@ public final class Fakes {
 
 		public final List<AuditEntry> entries = new ArrayList<>();
 
+		/** Items to report as soft-deleted when their history is read. */
+		public final Set<UUID> deleted = new HashSet<>();
+
+		/** Time of the next entry read back: each entry is one second after the previous one. */
+		private final Instant start = Instant.parse("2026-09-25T10:00:00Z");
+
 		@Override
 		public void append(AuditEntry entry) {
 			entries.add(entry);
+		}
+
+		/** An item exists for the history if anything was ever written for it (every item has its CREATED entry). */
+		@Override
+		public Optional<History> history(UUID workItemCode, int page, int size) {
+			List<HistoryEntry> mine = new ArrayList<>();
+			for (int i = 0; i < entries.size(); i++) {
+				AuditEntry entry = entries.get(i);
+				if (entry.workItemCode().equals(workItemCode)) {
+					mine.add(new HistoryEntry(entry.type(), entry.field(), entry.oldValue(), entry.newValue(), entry.additionalData(),
+							new UserRef(entry.changedBy(), "User " + entry.changedBy()), start.plusSeconds(i)));
+				}
+			}
+			if (mine.isEmpty()) {
+				return Optional.empty();
+			}
+			List<HistoryEntry> newestFirst = mine.reversed();
+			int from = Math.min(page * size, newestFirst.size());
+			int to = Math.min(from + size, newestFirst.size());
+			return Optional.of(new History(!deleted.contains(workItemCode), List.copyOf(newestFirst.subList(from, to)), mine.size()));
 		}
 
 		public List<String> types() {
@@ -103,6 +138,9 @@ public final class Fakes {
 
 		public int runs;
 
+		/** True while the work of a transaction runs, so a test can see that something happened after the commit. */
+		public boolean active;
+
 		/** Entries appended during each transaction, in order, to check the audit is written inside it. */
 		public final List<Integer> auditSizeAtEnd = new ArrayList<>();
 
@@ -115,9 +153,37 @@ public final class Fakes {
 		@Override
 		public <T> T inTransaction(Supplier<T> work) {
 			runs++;
-			T result = work.get();
+			active = true;
+			T result;
+			try {
+				result = work.get();
+			}
+			finally {
+				active = false;
+			}
 			auditSizeAtEnd.add(audit.entries.size());
 			return result;
+		}
+
+	}
+
+	/** Keeps the events it is given, and whether each was published while a transaction was still open. */
+	public static class Events implements DomainEventPublisher {
+
+		public final List<DomainEvent> published = new ArrayList<>();
+
+		public final List<Boolean> insideTransaction = new ArrayList<>();
+
+		private final Transactions transactions;
+
+		public Events(Transactions transactions) {
+			this.transactions = transactions;
+		}
+
+		@Override
+		public void publish(DomainEvent event) {
+			published.add(event);
+			insideTransaction.add(transactions.active);
 		}
 
 	}
@@ -492,6 +558,9 @@ public final class Fakes {
 
 		public final List<Comment> stored = new ArrayList<>();
 
+		/** Who each comment mentions, by comment code. */
+		public final Map<UUID, List<UUID>> mentions = new HashMap<>();
+
 		private final WorkItems items;
 
 		public Comments(WorkItems items) {
@@ -511,6 +580,154 @@ public final class Fakes {
 			Comment comment = new Comment(UUID.randomUUID(), workItemCode, new UserRef(authorCode, "Author"), content, NOW);
 			stored.add(comment);
 			return Optional.of(comment);
+		}
+
+		@Override
+		public void addMentions(UUID commentCode, java.util.Collection<UUID> userCodes) {
+			mentions.computeIfAbsent(commentCode, _ -> new ArrayList<>()).addAll(userCodes);
+		}
+
+	}
+
+	/** The tenant's users as the mention validation and the autocomplete see them. */
+	public static class Users implements UserRepository {
+
+		private final Map<UUID, String> names = new java.util.LinkedHashMap<>();
+
+		private final Set<UUID> inactive = new HashSet<>();
+
+		public UUID add(String fullName) {
+			UUID code = UUID.randomUUID();
+			names.put(code, fullName);
+			return code;
+		}
+
+		public void deactivate(UUID code) {
+			inactive.add(code);
+		}
+
+		public String nameOf(UUID code) {
+			return names.get(code);
+		}
+
+		@Override
+		public List<UserRef> findActive(java.util.Collection<UUID> userCodes) {
+			return userCodes.stream().filter(names::containsKey).filter(code -> !inactive.contains(code)).distinct()
+					.map(code -> new UserRef(code, names.get(code))).toList();
+		}
+
+		@Override
+		public List<UserRef> search(String query, int limit) {
+			String text = query.toLowerCase(java.util.Locale.ROOT);
+			return names.entrySet().stream().filter(entry -> !inactive.contains(entry.getKey()))
+					.filter(entry -> java.util.Arrays.stream(entry.getValue().toLowerCase(java.util.Locale.ROOT).split(" ")).anyMatch(word -> word.startsWith(text))
+							|| entry.getValue().toLowerCase(java.util.Locale.ROOT).startsWith(text))
+					.sorted(java.util.Map.Entry.comparingByValue()).limit(limit).map(entry -> new UserRef(entry.getKey(), entry.getValue())).toList();
+		}
+
+		@Override
+		public int countActive() {
+			return (int) names.keySet().stream().filter(code -> !inactive.contains(code)).count();
+		}
+
+	}
+
+	/** Notifications of every recipient; remembers whether each was written while a transaction was open. */
+	public static class Notifications implements NotificationRepository {
+
+		private record Row(UUID recipient, Notification notification, boolean itemActive) {
+		}
+
+		private final List<Row> rows = new ArrayList<>();
+
+		/** Whether each notification was created inside a transaction, in creation order. */
+		public final List<Boolean> createdInsideTransaction = new ArrayList<>();
+
+		private final WorkItems items;
+
+		private final Users users;
+
+		private final Transactions transactions;
+
+		private Instant clock = NOW;
+
+		public Notifications(WorkItems items, Users users, Transactions transactions) {
+			this.items = items;
+			this.users = users;
+			this.transactions = transactions;
+		}
+
+		/** Every notification of a recipient, newest first, whatever its item. */
+		public List<Notification> of(UUID recipient) {
+			return rows.stream().filter(row -> row.recipient().equals(recipient)).map(Row::notification).sorted(java.util.Comparator.comparing(Notification::createdAt).reversed()).toList();
+		}
+
+		public int total() {
+			return rows.size();
+		}
+
+		@Override
+		public Optional<Notification> create(NotificationType type, UUID recipientCode, UUID workItemCode, UUID commentCode, UUID actorCode) {
+			var item = items.findByCode(workItemCode);
+			if (item.isEmpty() || users.nameOf(recipientCode) == null) {
+				return Optional.empty();
+			}
+			boolean twice = rows.stream().anyMatch(row -> row.recipient().equals(recipientCode) && row.notification().type() == type
+					&& java.util.Objects.equals(row.notification().commentCode(), commentCode));
+			if (twice) {
+				throw new IllegalStateException("uk_notification_once");
+			}
+			clock = clock.plusSeconds(1);
+			Notification notification = new Notification(UUID.randomUUID(), type, workItemCode, item.get().displayKey(), item.get().title(), commentCode,
+					new UserRef(actorCode, users.nameOf(actorCode)), clock, null);
+			rows.add(new Row(recipientCode, notification, true));
+			createdInsideTransaction.add(transactions.active);
+			return Optional.of(notification);
+		}
+
+		private List<Row> visible(UUID recipient) {
+			return rows.stream().filter(row -> row.recipient().equals(recipient) && row.itemActive() && items.stored.containsKey(row.notification().workItemCode())).toList();
+		}
+
+		@Override
+		public Page list(UUID recipientCode, boolean unreadOnly, int page, int size) {
+			List<Notification> matching = visible(recipientCode).stream().map(Row::notification).filter(n -> !unreadOnly || !n.read())
+					.sorted(java.util.Comparator.comparing(Notification::createdAt).reversed()).toList();
+			int from = Math.min(page * size, matching.size());
+			return new Page(matching.subList(from, Math.min(from + size, matching.size())), matching.size());
+		}
+
+		@Override
+		public int countUnread(UUID recipientCode) {
+			return (int) visible(recipientCode).stream().filter(row -> !row.notification().read()).count();
+		}
+
+		@Override
+		public boolean markRead(UUID recipientCode, UUID notificationCode) {
+			for (int i = 0; i < rows.size(); i++) {
+				Row row = rows.get(i);
+				if (row.recipient().equals(recipientCode) && row.notification().code().equals(notificationCode) && visible(recipientCode).contains(row)) {
+					if (!row.notification().read()) {
+						Notification n = row.notification();
+						rows.set(i, new Row(row.recipient(), new Notification(n.code(), n.type(), n.workItemCode(), n.workItemKey(), n.workItemTitle(),
+								n.commentCode(), n.actor(), n.createdAt(), NOW.plusSeconds(3600)), true));
+					}
+					return true;
+				}
+			}
+			return false;
+		}
+
+		@Override
+		public int markAllRead(UUID recipientCode) {
+			int marked = 0;
+			for (Row row : List.copyOf(visible(recipientCode))) {
+				if (!row.notification().read()) {
+					markRead(recipientCode, row.notification().code());
+					marked++;
+				}
+			}
+			return marked;
 		}
 
 	}

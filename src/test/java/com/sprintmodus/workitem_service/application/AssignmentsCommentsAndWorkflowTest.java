@@ -24,6 +24,9 @@ import com.sprintmodus.workitem_service.application.service.GetWorkflowUseCase;
 import com.sprintmodus.workitem_service.application.service.ListCommentsUseCase;
 import com.sprintmodus.workitem_service.application.service.UnassignWorkItemUseCase;
 import com.sprintmodus.workitem_service.application.service.UpsertWorkflowUseCase;
+import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemAssigned;
+import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemCommentAdded;
+import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemUnassigned;
 import com.sprintmodus.workitem_service.domain.model.AssignmentRole;
 import com.sprintmodus.workitem_service.domain.model.ChangeType;
 import com.sprintmodus.workitem_service.domain.model.ItemType;
@@ -45,6 +48,12 @@ class AssignmentsCommentsAndWorkflowTest {
 
 	private final Fakes.Transactions transactions = new Fakes.Transactions(audit);
 
+	private final Fakes.Users users = new Fakes.Users();
+
+	private final Fakes.Notifications notifications = new Fakes.Notifications(items, users, transactions);
+
+	private final Fakes.Events events = new Fakes.Events(transactions);
+
 	private final Actor member = new Actor(UUID.randomUUID(), OrganizationRole.MEMBER);
 
 	private final Actor owner = new Actor(UUID.randomUUID(), OrganizationRole.OWNER);
@@ -58,9 +67,9 @@ class AssignmentsCommentsAndWorkflowTest {
 
 	// ------------------------------------------------------------------ assignments
 
-	private final AssignWorkItemUseCase assign = new AssignWorkItemUseCase(items, assignments, audit, transactions);
+	private final AssignWorkItemUseCase assign = new AssignWorkItemUseCase(items, assignments, audit, transactions, events);
 
-	private final UnassignWorkItemUseCase unassign = new UnassignWorkItemUseCase(assignments, audit, transactions);
+	private final UnassignWorkItemUseCase unassign = new UnassignWorkItemUseCase(assignments, audit, transactions, events);
 
 	@Test
 	void assignsAUserInARoleAndAuditsItWithTheActingUser() {
@@ -77,6 +86,32 @@ class AssignmentsCommentsAndWorkflowTest {
 			assertThat(entry.additionalData()).containsEntry("userCode", ana.toString()).containsEntry("role", "DEV");
 		});
 		assertThat(transactions.auditSizeAtEnd).containsExactly(1);
+	}
+
+	@Test
+	void anAssignmentAndItsRemovalArePublishedAsEventsAfterTheyCommitted() {
+		UUID ana = assignments.addUser("Ana Diaz");
+
+		var assignment = assign.execute(new Assign(member, item.code(), ana, AssignmentRole.QA)).getValue();
+		unassign.execute(owner, item.code(), assignment.code());
+
+		assertThat(events.published).containsExactly(
+				new WorkItemAssigned(item.code(), member.userCode(), assignment.code(), ana, AssignmentRole.QA),
+				new WorkItemUnassigned(item.code(), owner.userCode(), assignment.code(), ana, AssignmentRole.QA));
+		assertThat(events.insideTransaction).containsExactly(false, false);
+	}
+
+	@Test
+	void refusedAssignmentsAndRemovalsPublishNothing() {
+		UUID ana = assignments.addUser("Ana Diaz");
+		assign.execute(new Assign(member, item.code(), ana, AssignmentRole.DEV));
+		events.published.clear();
+
+		assign.execute(new Assign(member, item.code(), ana, AssignmentRole.DEV)); // already assigned
+		assign.execute(new Assign(member, item.code(), UUID.randomUUID(), AssignmentRole.DEV)); // no such user
+		unassign.execute(owner, item.code(), UUID.randomUUID()); // no such assignment
+
+		assertThat(events.published).isEmpty();
 	}
 
 	@Test
@@ -130,7 +165,7 @@ class AssignmentsCommentsAndWorkflowTest {
 
 	// ------------------------------------------------------------------ comments
 
-	private final AddCommentUseCase addComment = new AddCommentUseCase(comments, audit, transactions);
+	private final AddCommentUseCase addComment = new AddCommentUseCase(comments, users, notifications, audit, transactions, events);
 
 	private final ListCommentsUseCase listComments = new ListCommentsUseCase(items, comments);
 
@@ -148,6 +183,22 @@ class AssignmentsCommentsAndWorkflowTest {
 			assertThat(entry.additionalData()).containsEntry("commentCode", result.getValue().code().toString());
 		});
 		assertThat(transactions.auditSizeAtEnd).containsExactly(1);
+	}
+
+	@Test
+	void aCommentIsPublishedAsAnEventWithoutItsTextAfterItCommitted() {
+		var comment = addComment.execute(new AddComment(member, item.code(), "Looks good to me")).getValue();
+
+		assertThat(events.published).containsExactly(new WorkItemCommentAdded(item.code(), member.userCode(), comment.code()));
+		assertThat(events.insideTransaction).containsExactly(false);
+	}
+
+	@Test
+	void aRefusedCommentPublishesNothing() {
+		addComment.execute(new AddComment(member, item.code(), "   "));
+		addComment.execute(new AddComment(member, UUID.randomUUID(), "Hi"));
+
+		assertThat(events.published).isEmpty();
 	}
 
 	@Test

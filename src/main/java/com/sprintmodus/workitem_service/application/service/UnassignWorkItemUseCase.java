@@ -10,14 +10,16 @@ import com.sprintmodus.common_lib.result.Unit;
 import com.sprintmodus.workitem_service.application.dto.Actor;
 import com.sprintmodus.workitem_service.application.error.AssignmentError;
 import com.sprintmodus.workitem_service.application.error.AssignmentError.AssignmentNotFound;
+import com.sprintmodus.workitem_service.application.port.external.DomainEventPublisher;
 import com.sprintmodus.workitem_service.application.port.external.TransactionRunner;
 import com.sprintmodus.workitem_service.application.port.persistence.AssignmentRepository;
 import com.sprintmodus.workitem_service.application.port.persistence.AuditRepository;
+import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemUnassigned;
 import com.sprintmodus.workitem_service.domain.model.Assignment;
 import com.sprintmodus.workitem_service.domain.model.AuditEntry;
 import com.sprintmodus.workitem_service.domain.model.ChangeType;
 
-/** Removes an assignment (it is deactivated, so assigning the same user and role again brings it back) and records {@code UNASSIGNED}. */
+/** Removes an assignment (it is deactivated, so assigning the same user and role again brings it back) records {@code UNASSIGNED} and, once committed, publishes a {@link WorkItemUnassigned} event. */
 @Service
 public class UnassignWorkItemUseCase {
 
@@ -27,10 +29,14 @@ public class UnassignWorkItemUseCase {
 
 	private final TransactionRunner transactions;
 
-	public UnassignWorkItemUseCase(AssignmentRepository assignments, AuditRepository audit, TransactionRunner transactions) {
+	private final DomainEventPublisher events;
+
+	public UnassignWorkItemUseCase(AssignmentRepository assignments, AuditRepository audit, TransactionRunner transactions,
+			DomainEventPublisher events) {
 		this.assignments = assignments;
 		this.audit = audit;
 		this.transactions = transactions;
+		this.events = events;
 	}
 
 	public Result<Unit, AssignmentError> execute(Actor actor, UUID workItemCode, UUID assignmentCode) {
@@ -38,14 +44,16 @@ public class UnassignWorkItemUseCase {
 		if (assignment == null) {
 			return Result.failure(new AssignmentNotFound());
 		}
-		return transactions.inTransaction(() -> {
+		Result<Unit, AssignmentError> result = transactions.inTransaction(() -> {
 			if (!assignments.unassign(workItemCode, assignmentCode)) {
 				return Result.<Unit, AssignmentError>failure(new AssignmentNotFound());
 			}
 			audit.append(new AuditEntry(workItemCode, actor.userCode(), ChangeType.UNASSIGNED, "Assignee", assignment.label(), null,
-					Map.of("userCode", assignment.userCode().toString(), "role", assignment.role().name())));
+					Map.of("userCode", assignment.userCode().toString(), "fullName", assignment.fullName(), "role", assignment.role().name())));
 			return Result.<Unit, AssignmentError>success(Unit.VALUE);
 		});
+		return result.tap(_ -> events.publish(new WorkItemUnassigned(workItemCode, actor.userCode(), assignmentCode,
+				assignment.userCode(), assignment.role())));
 	}
 
 }

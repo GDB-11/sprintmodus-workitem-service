@@ -24,7 +24,12 @@ and `displayKey` (`WAR-1000`) are for display and search.
 | PUT / DELETE | `/api/work-items/{code}/sprint` | Owners/admins only (`403 FORBIDDEN` otherwise). `{sprintCode}` moves, `DELETE` returns it to the backlog. The velocity of both sprints is recomputed |
 | PUT | `/api/work-items/{code}/rank` | Owners/admins only (`403`). `{beforeCode}`: puts the card right before that card, or last when `null`, among the active items of its project that share its type, status and priority (`400` if `beforeCode` is not one of them). The group is locked and renumbered `1..n`; audited as `FIELD_CHANGED` of `BoardRank`; broadcasts `ITEMS_REORDERED` |
 | POST / DELETE | `/api/work-items/{code}/assignments[/{assignmentCode}]` | `{userCode, role}` with role `DEV|QA|PO|PM|SCRUM_MASTER` |
-| GET / POST | `/api/work-items/{code}/comments` | Comments are listed oldest first; there is no edit or delete |
+| GET / POST | `/api/work-items/{code}/comments` | Comments are listed oldest first; there is no edit or delete. The text may mention people as `@[Full Name](userCode)`: a user who is not active in the tenant is `400 UNKNOWN_MENTION`, more than 20 distinct mentions `400 INVALID_COMMENT` (nothing is written). Each mentioned user other than the author gets one `MENTIONED` notification, written in the comment's transaction. The `COMMENTED` audit preview reads `@Full Name` |
+| GET | `/api/notifications` | The caller's own notifications, newest first: `?unread=false&page=0&size=20` (size 1–100) → `{items:[{notificationCode, type, workItem:{workItemCode, displayKey, title}, commentCode, actor:{userCode, fullName}, isRead, createdAt, readAt}], total, page, size}`. `type` is a machine code (`MENTIONED`): no text is stored or returned. Notifications about soft-deleted items are not listed |
+| GET | `/api/notifications/unread-count` | `{count}`: the number on the bell (the frontend polls it every 60 s) |
+| POST | `/api/notifications/{code}/read`, `/api/notifications/read-all` | `204`; idempotent. Someone else's (or unknown) notification is `404` |
+| GET | `/api/users?q=&limit=` | Active users of the tenant whose name, or any word of it, starts with `q` (limit 1–50, default 10) → `[{userCode, fullName}]`: the `@` autocomplete. Never an e-mail |
+| GET | `/api/work-items/{code}/history` | `?page=0&size=50` (size 1–200). The item's audit trail, **newest change first**: `{items:[{changeType, field, oldValue, newValue, additionalData, changedBy:{userCode,fullName}, createdAt}], total, page, size}`. `oldValue`/`newValue` are what was stored (a status change stores status codes; text is cut at 100 chars); `additionalData` carries the names a client shows (`from`/`to` status names, `from`/`to` parent keys, `targetKey` + `type` of a link, `fullName` + `role` of an assignee, `sprint` = the target sprint's name). No internal ids. A read: it writes no audit entry. Any member reads an active item's history; a soft-deleted item's history (which ends with its `DELETED` entry) is for owners/admins, a `404` for members |
 | GET | `/api/status-workflows/{itemType}` | Active statuses (`code`, `displayName`, `order`, `isTerminal`) and transitions (`from`, `to`, `allowedBackward`, `requiredRole`): drives dropdowns and Kanban columns |
 | POST | `/api/admin/status-workflows` | Owners/admins. Replaces a type's whole workflow. A status still used by an active item cannot be dropped (`409 STATUS_IN_USE`); dropped, unused statuses are retired, not deleted. A transition may set `requiredRole` (one of `DEV`/`QA`/`PO`/`PM`/`SCRUM_MASTER`) to restrict who may make that move; omitted or `null` means anyone may |
 
@@ -38,7 +43,7 @@ Warnings never block: a response's `warnings` says what to tell the user (`NON_S
 
 - **Every mutation is audited by its use case, in the same transaction** (`WorkItemAudit`: CREATED, STATE_CHANGED,
   FIELD_CHANGED, DESCRIPTION_EDITED, EFFORT_CHANGED, PARENT_CHANGED, SPRINT_CHANGED, ASSIGNED, UNASSIGNED, LINKED,
-  UNLINKED, COMMENTED, DELETED). If the audit row cannot be written, the change is rolled back (`TransactionRunner` port).
+  UNLINKED, COMMENTED, DELETED; `COMMENT_EDITED`, `COMMENT_DELETED` and `RESTORED` exist in the schema but nothing produces them yet: there is no comment edit/delete or restore endpoint). If the audit row cannot be written, the change is rolled back (`TransactionRunner` port).
 - **Effort rollup (Phase 7) is computed on read, never stored.** `WorkItemResponse.childrenEffortPoints` is summed in
   `Responses.WorkItemResponse.from()` from the children `WorkItemDetails.assemble()` already loads — no extra query, no
   trigger, no scheduled job, nothing to keep in sync. A PBI/Bug's own `effortPoints` is unaffected; the two numbers are
@@ -88,6 +93,18 @@ browser cannot send a header when opening a WebSocket, so the token travels in t
   item's status or priority changes, because it then joins another group.
 - **In memory, per instance**: presence and the broker itself, so events reach the clients of this instance only.
 
+## Domain events (in-process seam, no broker)
+
+After a change has **committed**, its use case calls the `DomainEventPublisher` port with a `DomainEvent`:
+`WorkItemStatusChanged` (from/to status codes), `WorkItemAssigned`, `WorkItemUnassigned` and `WorkItemCommentAdded` (the
+comment's code, not its text). Events hold codes and machine identifiers only; a consumer looks up the rest by `workItemCode`.
+Rejected or rolled-back changes publish nothing. `infrastructure/event/SpringDomainEventPublisher` wraps each event in a
+`TenantEvent(tenantId, occurredAt, event)` (tenant taken from `TenantContext`, so it works for REST and WebSocket alike) and hands
+it to Spring's `ApplicationEventPublisher`: listen with `@EventListener` on `TenantEvent`. Listeners run **synchronously** on the
+request thread, inside the tenant context, so slow or remote work must be handed off (`@Async`); a failing listener is logged and
+never turns a saved change into an error. There is deliberately **no listener, no RabbitMQ and no notification service yet**:
+this is only the seam for a future `notification-service`. The board's WebSocket broadcast is unchanged and does not use it.
+
 ## Layout
 
 Clean Architecture: `domain` (plain Java: model, hierarchy/effort/diff rules) ← `application` (use cases returning
@@ -114,3 +131,33 @@ board's STOMP handlers, gates and broadcaster) and `infrastructure` (Spring conf
   throttling, illegal moves told only to the sender, and tenant isolation (a forged subscription or publish closes the
   connection). `WebSocketSessionManagerTest` and `TypingThrottleTest` cover presence and throttling in isolation.
 - `TenantRoutingIntegrationTest` covers tenant routing and the Feign relay.
+
+## Docker
+
+`Dockerfile` (multi-stage: Maven build on `eclipse-temurin:26-jdk` -> `eclipse-temurin:26-jre`, layered jar, non-root uid 10001, exec-form
+entrypoint, `HEALTHCHECK` on `/actuator/health/liveness`). Nothing secret or environment-specific is baked in: every setting
+comes from the environment at run time (see `application.properties`); orchestration lives in `sprintmodus-infrastructure`.
+
+```bash
+export GITHUB_TOKEN=<token with read:packages>
+docker build --secret id=github_token,env=GITHUB_TOKEN \
+  --build-arg GITHUB_ACTOR=<your github user> -t ghcr.io/gdb-11/sprintmodus-workitem-service:dev .
+```
+
+`common-lib` and the `db-*` jars come from GitHub Packages through `.mvn/github-settings.xml` (Central is listed first, so only
+`com.sprintmodus` reaches GitHub). The token is a build **secret**, never a build argument or a layer. It needs `read:packages`, and
+a valid one is required even when the repositories are private. `LIBS_REPO_URL` can point at any Maven repository (for example a
+local static one) to build offline.
+
+CI (`.github/workflows/ci.yml`) runs the tests, then builds and pushes `ghcr.io/gdb-11/sprintmodus-workitem-service` tagged `sha-<commit>` on
+`main` and `<version>` on a `v<version>` tag, never `latest`. The tests need Docker themselves, so the image build skips them.
+
+## Mentions and notifications (Phase 14)
+
+`AddCommentUseCase` parses the tokens with the pure `MentionParser` (a malformed token is plain text; the same user twice counts once),
+checks the users, then in **one transaction** writes the comment, its `CommentMention` rows, one `Notification` per mentioned user
+other than the author, and the audit entry. After the commit it publishes `WorkItemCommentAdded` and, per notification,
+`UserMentioned` and `NotificationCreated` (codes only, no text). **`NotificationCreated` is the seam for e-mail**: a later
+`@Async @EventListener` of `TenantEvent` looks the notification up by its code and sends it, honouring a per-user preference table;
+none of that exists yet (no mail dependency, no SMTP settings). Tenant migration V1.12 holds the tables; see its header for the MySQL
+index rule (no index that starts with a foreign-key column and continues with a nullable one).

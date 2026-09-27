@@ -44,7 +44,7 @@ public class RemoveLinkUseCase {
 			}
 			audit.append(new AuditEntry(workItemCode, actor.userCode(), ChangeType.UNLINKED, "Link",
 					link.other().displayKey() + " (" + link.type() + ")", null,
-					Map.of("targetCode", link.other().code().toString(), "type", link.type().name())));
+					Map.of("targetCode", link.other().code().toString(), "targetKey", link.other().displayKey(), "type", link.type().name())));
 			return Result.<Unit, LinkError>success(Unit.VALUE);
 		});
 	}

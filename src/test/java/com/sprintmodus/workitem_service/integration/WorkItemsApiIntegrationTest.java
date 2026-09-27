@@ -14,13 +14,17 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.event.EventListener;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -29,6 +33,11 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.jayway.jsonpath.JsonPath;
+import com.sprintmodus.workitem_service.application.event.TenantEvent;
+import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemAssigned;
+import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemCommentAdded;
+import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemStatusChanged;
+import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemUnassigned;
 import com.sprintmodus.workitem_service.integration.TenantFixtures.Tenant;
 import com.sprintmodus.workitem_service.integration.TenantFixtures.User;
 
@@ -58,6 +67,31 @@ class WorkItemsApiIntegrationTest {
 
 	@Autowired
 	MockMvc mvc;
+
+	/** What a future notification listener would be: a plain {@code @EventListener} of {@link TenantEvent}. */
+	static class RecordingListener {
+
+		final List<TenantEvent> events = new CopyOnWriteArrayList<>();
+
+		@EventListener
+		void on(TenantEvent event) {
+			events.add(event);
+		}
+
+	}
+
+	@TestConfiguration
+	static class ListenerConfig {
+
+		@Bean
+		RecordingListener recordingListener() {
+			return new RecordingListener();
+		}
+
+	}
+
+	@Autowired
+	RecordingListener listener;
 
 	@AfterEach
 	void projectServiceIsBackUp() {
@@ -660,6 +694,41 @@ class WorkItemsApiIntegrationTest {
 		send(get("/api/work-items?parentCode=" + pbi), owner, null).andExpect(jsonPath("$.total").value(2));
 	}
 
+	@Test
+	void onlyTheHealthGroupOfActuatorIsReachableAndItNeedsNoToken() throws Exception {
+		mvc.perform(get("/actuator/health/liveness")).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("UP"));
+		mvc.perform(get("/actuator/health")).andExpect(status().isOk()).andExpect(jsonPath("$.components").doesNotExist());
+		mvc.perform(get("/actuator/env")).andExpect(status().is4xxClientError());
+		mvc.perform(get("/actuator/beans")).andExpect(status().is4xxClientError());
+	}
+
+	// ---------------------------------------------------------------- events
+
+	@Test
+	void changesArePublishedAsTenantEventsOnlyOnceCommittedAndNeverForRefusedOnes() throws Exception {
+		Tenant tenant = TenantFixtures.newTenant();
+		Caller owner = owner(tenant);
+		Caller member = member(tenant);
+		UUID project = tenant.newProject("WAR");
+		UUID pbi = newItem(owner, project, "PBI", "Story");
+		listener.events.clear();
+
+		changeStatus(member, pbi, "APPROVED").andExpect(status().isOk());
+		changeStatus(member, pbi, "DONE").andExpect(status().isConflict());
+		String comment = read(send(post("/api/work-items/" + pbi + "/comments"), member, "{\"content\":\"Hi\"}").andExpect(status().isCreated()), "$.commentCode");
+		String assignment = read(send(post("/api/work-items/" + pbi + "/assignments"), owner,
+				"{\"userCode\":\"%s\",\"role\":\"DEV\"}".formatted(member.user().code())).andExpect(status().isCreated()), "$.assignmentCode");
+		send(delete("/api/work-items/" + pbi + "/assignments/" + assignment), owner, null).andExpect(status().isNoContent());
+
+		assertThat(listener.events).allSatisfy(event -> assertThat(event.tenantId()).isEqualTo(tenant.id()))
+				.allSatisfy(event -> assertThat(event.occurredAt()).isNotNull());
+		assertThat(listener.events).extracting(TenantEvent::event).containsExactly(
+				new WorkItemStatusChanged(pbi, member.user().code(), "NEW", "APPROVED"),
+				new WorkItemCommentAdded(pbi, member.user().code(), UUID.fromString(comment)),
+				new WorkItemAssigned(pbi, owner.user().code(), UUID.fromString(assignment), member.user().code(), com.sprintmodus.workitem_service.domain.model.AssignmentRole.DEV),
+				new WorkItemUnassigned(pbi, owner.user().code(), UUID.fromString(assignment), member.user().code(), com.sprintmodus.workitem_service.domain.model.AssignmentRole.DEV));
+	}
+
 	// ---------------------------------------------------------------- comments
 
 	@Test
@@ -681,6 +750,97 @@ class WorkItemsApiIntegrationTest {
 				.andExpect(jsonPath("$[0].content").value("First!")).andExpect(jsonPath("$[1].content").value("Second"));
 		assertThat(audit(tenant, pbi)).contains("COMMENTED|Comment||First!|" + tenant.member().email(), "COMMENTED|Comment||Second|" + tenant.owner().email());
 		send(delete("/api/work-items/" + pbi + "/comments"), owner, null).andExpect(status().is4xxClientError());
+	}
+
+	// ---------------------------------------------------------------- history
+
+	@Test
+	void theHistoryIsTheWholeTimelineNewestFirstWithWhoAndWhatOfEveryKindOfChange() throws Exception {
+		Tenant tenant = TenantFixtures.newTenant();
+		Caller owner = owner(tenant);
+		Caller member = member(tenant);
+		UUID project = tenant.newProject("WAR");
+		UUID parent = newItem(owner, project, "FEATURE", "Parent");
+		UUID other = newItem(owner, project, "PBI", "Other");
+		UUID pbi = newItem(owner, project, "PBI", "Story");
+
+		changeStatus(member, pbi, "APPROVED").andExpect(status().isOk());
+		send(put("/api/work-items/" + pbi), member, "{\"title\":\"Story 2\",\"effortPoints\":5}").andExpect(status().isOk());
+		send(post("/api/work-items/" + pbi + "/assignments"), owner, "{\"userCode\":\"%s\",\"role\":\"DEV\"}".formatted(tenant.member().code()))
+				.andExpect(status().isCreated());
+		send(put("/api/work-items/" + pbi + "/parent"), owner, "{\"parentCode\":\"%s\"}".formatted(parent)).andExpect(status().isOk());
+		send(post("/api/work-items/" + pbi + "/links"), owner, "{\"targetCode\":\"%s\",\"type\":\"BLOCKS\"}".formatted(other)).andExpect(status().isCreated());
+		send(post("/api/work-items/" + pbi + "/comments"), member, "{\"content\":\"Looks good\"}").andExpect(status().isCreated());
+
+		send(get("/api/work-items/" + pbi + "/history"), member, null).andExpect(status().isOk()).andExpect(jsonPath("$.total").value(8))
+				.andExpect(jsonPath("$.page").value(0)).andExpect(jsonPath("$.size").value(50))
+				.andExpect(jsonPath("$.items[*].changeType").value(org.hamcrest.Matchers.contains("COMMENTED", "LINKED", "PARENT_CHANGED", "ASSIGNED",
+						"EFFORT_CHANGED", "FIELD_CHANGED", "STATE_CHANGED", "CREATED")))
+				.andExpect(jsonPath("$.items[0].changedBy.fullName").value("Mia Member")).andExpect(jsonPath("$.items[0].changedBy.userCode").value(tenant.member().code().toString()))
+				.andExpect(jsonPath("$.items[0].newValue").value("Looks good")).andExpect(jsonPath("$.items[0].createdAt").exists())
+				.andExpect(jsonPath("$.items[1].additionalData.targetKey").value("WAR-1001")).andExpect(jsonPath("$.items[1].additionalData.type").value("BLOCKS"))
+				.andExpect(jsonPath("$.items[2].additionalData.to").value("WAR-1000")).andExpect(jsonPath("$.items[2].additionalData.from").doesNotExist())
+				.andExpect(jsonPath("$.items[3].additionalData.fullName").value("Mia Member")).andExpect(jsonPath("$.items[3].additionalData.role").value("DEV"))
+				.andExpect(jsonPath("$.items[6].oldValue").value("NEW")).andExpect(jsonPath("$.items[6].newValue").value("APPROVED"))
+				.andExpect(jsonPath("$.items[6].additionalData.to").value("Aprobado"))
+				.andExpect(jsonPath("$.items[7].changedBy.fullName").value("Olivia Owner")).andExpect(jsonPath("$.items[7].additionalData.displayKey").value("WAR-1002"))
+				.andExpect(jsonPath("$.items[0].id").doesNotExist()).andExpect(jsonPath("$.items[0].auditId").doesNotExist());
+
+		// moving it to another parent names both ends, and removing the parent names the old one
+		send(put("/api/work-items/" + pbi + "/parent"), owner, "{\"parentCode\":\"%s\"}".formatted(other)).andExpect(status().isOk());
+		send(delete("/api/work-items/" + pbi + "/parent"), owner, null).andExpect(status().isOk());
+		send(get("/api/work-items/" + pbi + "/history?size=2"), owner, null).andExpect(jsonPath("$.items[0].additionalData.from").value("WAR-1001"))
+				.andExpect(jsonPath("$.items[0].additionalData.to").doesNotExist()).andExpect(jsonPath("$.items[1].additionalData.from").value("WAR-1000"))
+				.andExpect(jsonPath("$.items[1].additionalData.to").value("WAR-1001"));
+	}
+
+	@Test
+	void theHistoryIsPagedAndValidated() throws Exception {
+		Tenant tenant = TenantFixtures.newTenant();
+		Caller owner = owner(tenant);
+		UUID project = tenant.newProject("WAR");
+		UUID pbi = newItem(owner, project, "PBI", "Story");
+		for (String status : List.of("APPROVED", "NEW", "APPROVED")) {
+			changeStatus(owner, pbi, status).andExpect(status().isOk());
+		}
+
+		send(get("/api/work-items/" + pbi + "/history?page=0&size=3"), owner, null).andExpect(jsonPath("$.total").value(4))
+				.andExpect(jsonPath("$.items.length()").value(3)).andExpect(jsonPath("$.items[0].newValue").value("APPROVED"));
+		send(get("/api/work-items/" + pbi + "/history?page=1&size=3"), owner, null).andExpect(jsonPath("$.items.length()").value(1))
+				.andExpect(jsonPath("$.items[0].changeType").value("CREATED"));
+		send(get("/api/work-items/" + pbi + "/history?page=2&size=3"), owner, null).andExpect(jsonPath("$.items.length()").value(0));
+		send(get("/api/work-items/" + pbi + "/history?page=-1"), owner, null).andExpect(status().isBadRequest());
+		send(get("/api/work-items/" + pbi + "/history?size=0"), owner, null).andExpect(status().isBadRequest());
+		send(get("/api/work-items/" + pbi + "/history?size=201"), owner, null).andExpect(status().isBadRequest());
+		send(get("/api/work-items/" + UUID.randomUUID() + "/history"), owner, null).andExpect(status().isNotFound());
+		assertThat(audit(tenant, pbi)).as("reading the history writes nothing").hasSize(4);
+	}
+
+	@Test
+	void theHistoryOfADeletedItemEndsWithItsDeletionAndIsForOwnersAndAdmins() throws Exception {
+		Tenant tenant = TenantFixtures.newTenant();
+		Caller owner = owner(tenant);
+		Caller member = member(tenant);
+		UUID project = tenant.newProject("WAR");
+		UUID pbi = newItem(member, project, "PBI", "Story");
+		send(delete("/api/work-items/" + pbi), member, null).andExpect(status().isNoContent());
+
+		send(get("/api/work-items/" + pbi + "/history"), member, null).andExpect(status().isNotFound());
+		send(get("/api/work-items/" + pbi + "/history"), admin(tenant), null).andExpect(status().isOk()).andExpect(jsonPath("$.total").value(2))
+				.andExpect(jsonPath("$.items[0].changeType").value("DELETED")).andExpect(jsonPath("$.items[0].oldValue").value("Story"))
+				.andExpect(jsonPath("$.items[1].changeType").value("CREATED"));
+		send(get("/api/work-items/" + pbi + "/history"), owner, null).andExpect(status().isOk());
+	}
+
+	@Test
+	void aTenantNeverSeesAnotherTenantsHistory() throws Exception {
+		Tenant alpha = TenantFixtures.newTenant();
+		Tenant beta = TenantFixtures.newTenant();
+		UUID alphaItem = newItem(owner(alpha), alpha.newProject("ALP"), "PBI", "Alpha secret");
+
+		send(get("/api/work-items/" + alphaItem + "/history"), owner(alpha), null).andExpect(status().isOk());
+		send(get("/api/work-items/" + alphaItem + "/history"), owner(beta), null).andExpect(status().isNotFound());
+		mvc.perform(get("/api/work-items/" + alphaItem + "/history")).andExpect(status().isUnauthorized());
 	}
 
 	// ---------------------------------------------------------------- listing

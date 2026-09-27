@@ -37,4 +37,16 @@ interface CommentQueries extends Repository<CommentEntity, Long> {
 	int insert(@Param("code") String code, @Param("workItemCode") String workItemCode, @Param("authorCode") String authorCode,
 			@Param("content") String content);
 
+	/** Records who a comment mentions; {@code codes} is a JSON array of user UUIDs. Nothing is inserted for an unknown user. */
+	@Modifying(clearAutomatically = true)
+	@Query(nativeQuery = true, value = """
+			INSERT INTO CommentMention (CommentId, UserId)
+			SELECT c.CommentId, u.UserId
+			FROM Comment c
+			JOIN JSON_TABLE(:codes, '$[*]' COLUMNS (code CHAR(36) PATH '$')) j ON TRUE
+			JOIN `User` u ON u.UserCode = UUID_TO_BIN(j.code)
+			WHERE c.CommentCode = UUID_TO_BIN(:commentCode)
+			""")
+	int insertMentions(@Param("commentCode") String commentCode, @Param("codes") String codes);
+
 }

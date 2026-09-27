@@ -1,5 +1,6 @@
 package com.sprintmodus.workitem_service.application.service;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -65,12 +66,20 @@ public class SetParentUseCase {
 
 		String oldParent = item.parentCode() == null ? null : item.parentCode().toString();
 		String newParent = command.parentCode() == null ? null : command.parentCode().toString();
+		// the keys the history shows instead of the codes; the parents may be deleted later, the history must still read
+		Map<String, String> data = new HashMap<>(Map.of("displayKey", item.displayKey()));
+		if (item.parentCode() != null) {
+			items.findByCode(item.parentCode()).ifPresent(old -> data.put("from", old.displayKey()));
+		}
+		if (command.parentCode() != null) {
+			items.findByCode(command.parentCode()).ifPresent(added -> data.put("to", added.displayKey()));
+		}
 		boolean applied = transactions.inTransaction(() -> {
 			if (!items.setParent(item.code(), command.parentCode(), command.actor().userCode())) {
 				return false;
 			}
 			audit.append(new AuditEntry(item.code(), command.actor().userCode(), ChangeType.PARENT_CHANGED, "Parent", oldParent, newParent,
-					Map.of("displayKey", item.displayKey())));
+					data));
 			return true;
 		});
 		if (!applied) {

@@ -1,8 +1,10 @@
 package com.sprintmodus.workitem_service.infrastructure.persistence;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Repository;
 
@@ -31,6 +33,12 @@ class JpaCommentRepository implements CommentRepository {
 			return Optional.empty();
 		}
 		return comments.findByCode(code).map(JpaCommentRepository::toDomain);
+	}
+
+	@Override
+	public void addMentions(UUID commentCode, Collection<UUID> userCodes) {
+		String codes = userCodes.stream().map(code -> "\"" + code + "\"").collect(Collectors.joining(",", "[", "]"));
+		comments.insertMentions(commentCode.toString(), codes);
 	}
 
 	private static Comment toDomain(CommentEntity entity) {

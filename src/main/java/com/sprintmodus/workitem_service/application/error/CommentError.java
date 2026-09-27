@@ -13,6 +13,21 @@ public sealed interface CommentError extends ApplicationError {
 
 	}
 
+	/** A mention names someone who is not an active user of the tenant (a stale autocomplete, or a made-up code). */
+	record UnknownMention(String name) implements CommentError {
+
+		@Override
+		public String code() {
+			return "UNKNOWN_MENTION";
+		}
+
+		@Override
+		public String message() {
+			return "The user @" + name + " does not exist or is no longer active.";
+		}
+
+	}
+
 	record WorkItemNotFound() implements CommentError {
 
 		@Override

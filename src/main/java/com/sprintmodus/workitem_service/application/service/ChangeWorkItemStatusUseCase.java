@@ -15,11 +15,13 @@ import com.sprintmodus.workitem_service.application.error.StatusTransitionError.
 import com.sprintmodus.workitem_service.application.error.StatusTransitionError.StatusChangedConcurrently;
 import com.sprintmodus.workitem_service.application.error.StatusTransitionError.UnknownStatus;
 import com.sprintmodus.workitem_service.application.error.StatusTransitionError.WorkItemNotFound;
+import com.sprintmodus.workitem_service.application.port.external.DomainEventPublisher;
 import com.sprintmodus.workitem_service.application.port.external.TransactionRunner;
 import com.sprintmodus.workitem_service.application.port.persistence.AssignmentRepository;
 import com.sprintmodus.workitem_service.application.port.persistence.AuditRepository;
 import com.sprintmodus.workitem_service.application.port.persistence.WorkItemRepository;
 import com.sprintmodus.workitem_service.application.port.persistence.WorkflowRepository;
+import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemStatusChanged;
 import com.sprintmodus.workitem_service.domain.model.AssignmentRole;
 import com.sprintmodus.workitem_service.domain.model.AuditEntry;
 import com.sprintmodus.workitem_service.domain.model.ChangeType;
@@ -31,7 +33,8 @@ import com.sprintmodus.workitem_service.domain.model.Workflow.WorkflowTransition
 /**
  * Moves a work item along its type's configured workflow, forward, or backward where the workflow allows it. The change and
  * its {@code STATE_CHANGED} audit entry are written in one transaction, and the update only applies if the item is still in
- * the status it was read in, so two concurrent moves cannot both succeed. Entering or leaving a terminal status changes what
+ * the status it was read in, so two concurrent moves cannot both succeed. Once committed, a {@link WorkItemStatusChanged}
+ * event is published. Entering or leaving a terminal status changes what
  * the item's sprint has completed, so the sprint's velocity is refreshed afterwards.
  */
 @Service
@@ -53,9 +56,11 @@ public class ChangeWorkItemStatusUseCase {
 
 	private final BurndownRecorder burndown;
 
+	private final DomainEventPublisher events;
+
 	public ChangeWorkItemStatusUseCase(WorkItemRepository items, WorkflowRepository workflows, AssignmentRepository assignments,
 			AuditRepository audit, TransactionRunner transactions, WorkItemDetails details, SprintVelocitySync velocity,
-			BurndownRecorder burndown) {
+			BurndownRecorder burndown, DomainEventPublisher events) {
 		this.items = items;
 		this.workflows = workflows;
 		this.assignments = assignments;
@@ -64,6 +69,7 @@ public class ChangeWorkItemStatusUseCase {
 		this.details = details;
 		this.velocity = velocity;
 		this.burndown = burndown;
+		this.events = events;
 	}
 
 	public Result<WorkItemResponse, StatusTransitionError> execute(ChangeStatus command) {
@@ -100,6 +106,8 @@ public class ChangeWorkItemStatusUseCase {
 			// nothing was written: the item was moved or deleted by someone else since it was read
 			return Result.failure(items.findByCode(item.code()).isEmpty() ? new WorkItemNotFound() : new StatusChangedConcurrently());
 		}
+
+		events.publish(new WorkItemStatusChanged(item.code(), command.actor().userCode(), item.status().code(), target.code()));
 
 		List<Warning> warnings = item.status().terminal() != target.terminal() ? velocity.refresh(item.sprintCode()) : List.of();
 		if (item.status().terminal() != target.terminal()) {

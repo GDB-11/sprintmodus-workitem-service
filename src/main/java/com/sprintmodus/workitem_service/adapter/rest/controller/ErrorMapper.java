@@ -8,8 +8,10 @@ import com.sprintmodus.common_lib.web.ErrorResponse;
 import com.sprintmodus.workitem_service.application.error.AssignmentError;
 import com.sprintmodus.workitem_service.application.error.CommentError;
 import com.sprintmodus.workitem_service.application.error.LinkError;
+import com.sprintmodus.workitem_service.application.error.NotificationError;
 import com.sprintmodus.workitem_service.application.error.SprintMoveError;
 import com.sprintmodus.workitem_service.application.error.StatusTransitionError;
+import com.sprintmodus.workitem_service.application.error.UserSearchError;
 import com.sprintmodus.workitem_service.application.error.WorkItemError;
 import com.sprintmodus.workitem_service.application.error.WorkflowError;
 
@@ -36,6 +38,8 @@ final class ErrorMapper {
 			case CommentError comment -> status(comment);
 			case SprintMoveError move -> status(move);
 			case WorkflowError workflow -> status(workflow);
+			case NotificationError notification -> status(notification);
+			case UserSearchError _ -> HttpStatus.BAD_REQUEST;
 			default -> HttpStatus.INTERNAL_SERVER_ERROR;
 		};
 	}
@@ -76,7 +80,7 @@ final class ErrorMapper {
 
 	private static HttpStatus status(CommentError error) {
 		return switch (error) {
-			case CommentError.InvalidComment _ -> HttpStatus.BAD_REQUEST;
+			case CommentError.InvalidComment _, CommentError.UnknownMention _ -> HttpStatus.BAD_REQUEST;
 			case CommentError.WorkItemNotFound _ -> HttpStatus.NOT_FOUND;
 		};
 	}
@@ -95,6 +99,13 @@ final class ErrorMapper {
 			case WorkflowError.InvalidWorkflow _ -> HttpStatus.BAD_REQUEST;
 			case WorkflowError.NotAllowed _ -> HttpStatus.FORBIDDEN;
 			case WorkflowError.StatusInUse _ -> HttpStatus.CONFLICT;
+		};
+	}
+
+	private static HttpStatus status(NotificationError error) {
+		return switch (error) {
+			case NotificationError.InvalidQuery _ -> HttpStatus.BAD_REQUEST;
+			case NotificationError.NotificationNotFound _ -> HttpStatus.NOT_FOUND;
 		};
 	}
 

@@ -30,6 +30,7 @@ import com.sprintmodus.workitem_service.application.service.SprintVelocitySync;
 import com.sprintmodus.workitem_service.application.service.UpdateWorkItemUseCase;
 import com.sprintmodus.workitem_service.application.service.WorkItemDetails;
 import com.sprintmodus.workitem_service.domain.model.AssignmentRole;
+import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemStatusChanged;
 import com.sprintmodus.workitem_service.domain.model.ChangeType;
 import com.sprintmodus.workitem_service.domain.model.ItemType;
 import com.sprintmodus.workitem_service.domain.model.OrganizationRole;
@@ -51,6 +52,8 @@ class WorkItemUseCasesTest {
 	private final Fakes.Audit audit = new Fakes.Audit();
 
 	private final Fakes.Transactions transactions = new Fakes.Transactions(audit);
+
+	private final Fakes.Events events = new Fakes.Events(transactions);
 
 	private final Fakes.Projects projects = new Fakes.Projects();
 
@@ -74,7 +77,7 @@ class WorkItemUseCasesTest {
 
 	private final DeleteWorkItemUseCase delete = new DeleteWorkItemUseCase(items, audit, transactions, velocity, burndown);
 
-	private final ChangeWorkItemStatusUseCase changeStatus = new ChangeWorkItemStatusUseCase(items, workflows, assignments, audit, transactions, details, velocity, burndown);
+	private final ChangeWorkItemStatusUseCase changeStatus = new ChangeWorkItemStatusUseCase(items, workflows, assignments, audit, transactions, details, velocity, burndown, events);
 
 	private final MoveToSprintUseCase move = new MoveToSprintUseCase(items, projects, audit, transactions, details, velocity, burndown);
 
@@ -461,6 +464,27 @@ class WorkItemUseCasesTest {
 		});
 		assertThat(transactions.runs).isEqualTo(1);
 		assertThat(transactions.auditSizeAtEnd).containsExactly(1);
+	}
+
+	@Test
+	void aStatusChangeIsPublishedAsAnEventAfterItCommitted() {
+		var item = created(ItemType.PBI);
+
+		changeStatus.execute(new ChangeStatus(member, item.code(), "ACTIVE"));
+
+		assertThat(events.published).containsExactly(new WorkItemStatusChanged(item.code(), member.userCode(), "NEW", "ACTIVE"));
+		assertThat(events.insideTransaction).as("published after the commit, not inside it").containsExactly(false);
+	}
+
+	@Test
+	void aRejectedStatusChangePublishesNothing() {
+		var item = created(ItemType.PBI);
+
+		changeStatus.execute(new ChangeStatus(member, item.code(), "DONE")); // not reachable from NEW
+		changeStatus.execute(new ChangeStatus(member, item.code(), "FLYING"));
+		changeStatus.execute(new ChangeStatus(member, UUID.randomUUID(), "ACTIVE"));
+
+		assertThat(events.published).isEmpty();
 	}
 
 	@Test

@@ -416,8 +416,9 @@ class TenantRoutingIntegrationTest {
 
 	@Test
 	void everythingOutsideApiIsClosed() throws Exception {
-		call("/actuator/health", null).andExpect(status().isUnauthorized());
-		call("/actuator/health", tokenOf(a)).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("FORBIDDEN"));
+		// the health group is the one deliberate exception (container health check, see the health test); the rest of actuator is not even exposed
+		call("/actuator/env", null).andExpect(status().isUnauthorized());
+		call("/actuator/env", tokenOf(a)).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("FORBIDDEN"));
 		call("/", tokenOf(a)).andExpect(status().isForbidden());
 	}
 

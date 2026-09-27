@@ -58,7 +58,7 @@ class BurndownRecordingTest {
 	private final UpdateWorkItemUseCase update = new UpdateWorkItemUseCase(items, audit, transactions, details, velocity, burndown);
 
 	private final ChangeWorkItemStatusUseCase changeStatus = new ChangeWorkItemStatusUseCase(items, workflows, assignments, audit, transactions,
-			details, velocity, burndown);
+			details, velocity, burndown, new Fakes.Events(transactions));
 
 	private final MoveToSprintUseCase move = new MoveToSprintUseCase(items, projects, audit, transactions, details, velocity, burndown);
 
