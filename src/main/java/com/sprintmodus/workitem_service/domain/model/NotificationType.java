@@ -6,6 +6,8 @@ package com.sprintmodus.workitem_service.domain.model;
  */
 public enum NotificationType {
 
-	MENTIONED
+	MENTIONED,
+
+	ASSIGNED
 
 }

@@ -235,15 +235,32 @@ class WorkItemUseCasesTest {
 	}
 
 	@Test
-	void aTaskUnderATaskAndAnEpicUnderAFeatureAlsoWarnButSucceed() {
+	void aTaskUnderATaskAlsoWarnsButSucceeds() {
 		var task = created(ItemType.TASK);
-		var feature = created(ItemType.FEATURE);
 
 		var subTask = create.execute(new CreateWorkItem(member, project, ItemType.TASK, "T2", null, null, null, task.code(), null, null, null)).getValue();
-		var epic = create.execute(new CreateWorkItem(member, project, ItemType.EPIC, "E", null, null, null, feature.code(), null, null, null)).getValue();
 
 		assertThat(subTask.warnings()).hasSize(1);
-		assertThat(epic.warnings()).hasSize(1);
+	}
+
+	@Test
+	void anEpicCanNeverHaveAParent() {
+		var feature = created(ItemType.FEATURE);
+		int before = items.stored.size();
+
+		var result = create.execute(new CreateWorkItem(member, project, ItemType.EPIC, "E", null, null, null, feature.code(), null, null, null));
+
+		assertThat(result.getError()).isInstanceOf(WorkItemError.EpicCannotHaveParent.class);
+		assertThat(items.stored).hasSize(before);
+	}
+
+	@Test
+	void anExistingEpicCannotBeGivenAParent() {
+		var epic = created(ItemType.EPIC);
+		var feature = created(ItemType.FEATURE);
+
+		assertThat(setParent.execute(new SetParent(member, epic.code(), feature.code())).getError())
+				.isInstanceOf(WorkItemError.EpicCannotHaveParent.class);
 	}
 
 	@Test
@@ -373,18 +390,18 @@ class WorkItemUseCasesTest {
 
 	@Test
 	void aWorkItemCannotBecomeItsOwnAncestor() {
-		var epic = created(ItemType.EPIC);
-		var feature = create.execute(new CreateWorkItem(member, project, ItemType.FEATURE, "F", null, null, null, epic.code(), null, null, null)).getValue();
+		var feature = created(ItemType.FEATURE);
 		var pbi = create.execute(new CreateWorkItem(member, project, ItemType.PBI, "P", null, null, null, feature.code(), null, null, null)).getValue();
+		var task = create.execute(new CreateWorkItem(member, project, ItemType.TASK, "T", null, null, null, pbi.code(), null, null, null)).getValue();
 		audit.entries.clear();
 
-		// itself, and a grandchild (epic > feature > pbi)
-		for (UUID badParent : new UUID[] { epic.code(), pbi.code() }) {
-			var result = setParent.execute(new SetParent(member, epic.code(), badParent));
+		// itself, and a grandchild (feature > pbi > task)
+		for (UUID badParent : new UUID[] { feature.code(), task.code() }) {
+			var result = setParent.execute(new SetParent(member, feature.code(), badParent));
 			assertThat(result.getError()).isInstanceOfSatisfying(WorkItemError.InvalidParent.class, error -> assertThat(error.message()).contains("own ancestor"));
 		}
-		assertThat(setParent.execute(new SetParent(member, epic.code(), feature.code())).getError()).as("its own child").isInstanceOf(WorkItemError.InvalidParent.class);
-		assertThat(items.stored.get(epic.code()).parentCode()).isNull();
+		assertThat(setParent.execute(new SetParent(member, feature.code(), pbi.code())).getError()).as("its own child").isInstanceOf(WorkItemError.InvalidParent.class);
+		assertThat(items.stored.get(feature.code()).parentCode()).isNull();
 		assertThat(audit.entries).isEmpty();
 	}
 
@@ -416,18 +433,29 @@ class WorkItemUseCasesTest {
 	}
 
 	@Test
-	void deleteRecordsTheItemAndRefusesWhileItHasChildren() {
+	void deleteTakesTheWholeSubtreeWithIt() {
 		var epic = created(ItemType.EPIC);
 		var feature = create.execute(new CreateWorkItem(member, project, ItemType.FEATURE, "F", null, null, null, epic.code(), null, null, null)).getValue();
+		var pbi = create.execute(new CreateWorkItem(member, project, ItemType.PBI, "P", null, null, null, feature.code(), null, null, null)).getValue();
+		audit.entries.clear();
+
+		assertThat(delete.execute(member, epic.code()).isSuccess()).isTrue();
+		assertThat(items.stored).isEmpty();
+		assertThat(audit.entries).extracting(entry -> entry.type() + ":" + entry.oldValue()).containsExactly("DELETED:P", "DELETED:F", "DELETED:A EPIC");
+		assertThat(delete.execute(member, epic.code()).getError()).isInstanceOf(WorkItemError.WorkItemNotFound.class);
+		assertThat(pbi.code()).isNotNull();
+	}
+
+	@Test
+	void aMemberCannotDeleteOtherPeoplesChildrenWithTheirParent() {
+		var epic = created(ItemType.EPIC);
+		create.execute(new CreateWorkItem(admin, project, ItemType.FEATURE, "F", null, null, null, epic.code(), null, null, null));
 		audit.entries.clear();
 
 		assertThat(delete.execute(member, epic.code()).getError()).isInstanceOf(WorkItemError.HasChildren.class);
 		assertThat(audit.entries).isEmpty();
-
-		assertThat(delete.execute(member, feature.code()).isSuccess()).isTrue();
-		assertThat(delete.execute(member, epic.code()).isSuccess()).isTrue();
-		assertThat(audit.entries).extracting(entry -> entry.type() + ":" + entry.oldValue()).containsExactly("DELETED:F", "DELETED:A EPIC");
-		assertThat(delete.execute(member, epic.code()).getError()).isInstanceOf(WorkItemError.WorkItemNotFound.class);
+		assertThat(delete.execute(admin, epic.code()).isSuccess()).isTrue();
+		assertThat(items.stored).isEmpty();
 	}
 
 	@Test

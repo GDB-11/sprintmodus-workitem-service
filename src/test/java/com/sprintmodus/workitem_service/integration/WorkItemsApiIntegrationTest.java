@@ -257,11 +257,18 @@ class WorkItemsApiIntegrationTest {
 		send(put("/api/work-items/" + feature + "/parent"), owner, "{\"parentCode\":\"%s\"}".formatted(epic)).andExpect(status().isOk())
 				.andExpect(jsonPath("$.warnings.length()").value(0));
 		UUID epic2 = newItem(owner, project, "EPIC", "Epic under feature");
-		send(put("/api/work-items/" + epic2 + "/parent"), owner, "{\"parentCode\":\"%s\"}".formatted(feature)).andExpect(status().isOk())
-				.andExpect(jsonPath("$.warnings[0].code").value("NON_STANDARD_HIERARCHY")).andExpect(jsonPath("$.parentCode").value(feature.toString()));
+		send(put("/api/work-items/" + epic2 + "/parent"), owner, "{\"parentCode\":\"%s\"}".formatted(feature)).andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("EPIC_CANNOT_HAVE_PARENT"));
+		create(owner, project, "EPIC", "Epic created under feature", feature, null).andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("EPIC_CANNOT_HAVE_PARENT"));
 
-		assertThat(audit(tenant, epic2)).last().asString().startsWith("PARENT_CHANGED|");
-		send(delete("/api/work-items/" + epic2 + "/parent"), owner, null).andExpect(status().isOk()).andExpect(jsonPath("$.parentCode").doesNotExist());
+		UUID pbi = newItem(owner, project, "PBI", "Story");
+		UUID feature2 = newItem(owner, project, "FEATURE", "Feature under pbi");
+		send(put("/api/work-items/" + feature2 + "/parent"), owner, "{\"parentCode\":\"%s\"}".formatted(pbi)).andExpect(status().isOk())
+				.andExpect(jsonPath("$.warnings[0].code").value("NON_STANDARD_HIERARCHY")).andExpect(jsonPath("$.parentCode").value(pbi.toString()));
+
+		assertThat(audit(tenant, feature2)).last().asString().startsWith("PARENT_CHANGED|");
+		send(delete("/api/work-items/" + feature2 + "/parent"), owner, null).andExpect(status().isOk()).andExpect(jsonPath("$.parentCode").doesNotExist());
 	}
 
 	@Test
@@ -429,7 +436,7 @@ class WorkItemsApiIntegrationTest {
 	}
 
 	@Test
-	void deletingIsASoftDeleteLimitedToTheCreatorOrAnAdminAndBlockedByChildren() throws Exception {
+	void deletingIsASoftDeleteLimitedToTheCreatorOrAnAdminAndTakesTheSubtreeWithIt() throws Exception {
 		Tenant tenant = TenantFixtures.newTenant();
 		Caller owner = owner(tenant);
 		Caller member = member(tenant);
@@ -437,15 +444,15 @@ class WorkItemsApiIntegrationTest {
 		UUID mine = newItem(member, project, "PBI", "Mine");
 		UUID notMine = newItem(owner, project, "PBI", "Not mine");
 		UUID parent = newItem(member, project, "PBI", "Parent");
-		UUID child = newItem(member, project, "TASK", "Child", parent, null);
+		UUID child = newItem(owner, project, "TASK", "Child", parent, null);
 
 		send(delete("/api/work-items/" + notMine), member, null).andExpect(status().isForbidden());
 		send(delete("/api/work-items/" + parent), member, null).andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("WORK_ITEM_HAS_CHILDREN"));
 		send(delete("/api/work-items/" + mine), member, null).andExpect(status().isNoContent());
 		send(get("/api/work-items/" + mine), member, null).andExpect(status().isNotFound());
 		send(delete("/api/work-items/" + mine), member, null).andExpect(status().isNotFound());
-		send(delete("/api/work-items/" + child), member, null).andExpect(status().isNoContent());
 		send(delete("/api/work-items/" + parent), admin(tenant), null).andExpect(status().isNoContent());
+		send(get("/api/work-items/" + child), owner, null).andExpect(status().isNotFound());
 		send(delete("/api/work-items/" + notMine), admin(tenant), null).andExpect(status().isNoContent());
 
 		assertThat(tenant.string("SELECT COUNT(*) FROM WorkItem")).as("rows stay").isEqualTo("4");

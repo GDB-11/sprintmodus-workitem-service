@@ -236,6 +236,18 @@ interface WorkItemQueries extends Repository<WorkItemEntity, Long> {
 			""")
 	long countInSubtree(@Param("ancestor") String ancestor, @Param("candidate") String candidate);
 
+	/** The active items anywhere below {@code code} (not the item itself), deepest levels last. */
+	@Query(nativeQuery = true, value = """
+			WITH RECURSIVE subtree (id, depth) AS (
+			    SELECT c.WorkItemId, 1 FROM WorkItem c JOIN WorkItem pa ON pa.WorkItemId = c.ParentId
+			    WHERE pa.WorkItemCode = UUID_TO_BIN(:code) AND c.IsActive = TRUE
+			    UNION ALL
+			    SELECT c.WorkItemId, subtree.depth + 1 FROM WorkItem c JOIN subtree ON c.ParentId = subtree.id WHERE c.IsActive = TRUE
+			)
+			SELECT BIN_TO_UUID(w.WorkItemCode) FROM subtree JOIN WorkItem w ON w.WorkItemId = subtree.id ORDER BY subtree.depth, w.WorkItemId
+			""")
+	List<String> findActiveDescendantCodes(@Param("code") String code);
+
 	@Query(nativeQuery = true, value = """
 			SELECT COUNT(*) FROM WorkItem c JOIN WorkItem pa ON pa.WorkItemId = c.ParentId
 			WHERE pa.WorkItemCode = UUID_TO_BIN(:code) AND c.IsActive = TRUE

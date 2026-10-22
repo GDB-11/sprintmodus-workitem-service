@@ -32,6 +32,23 @@ interface UserQueries extends Repository<UserEntity, Long> {
 	List<UserEntity> search(@Param("prefix") String prefix, @Param("wordPrefix") String wordPrefix, @Param("limit") int limit);
 
 	@Query(nativeQuery = true, value = """
+			SELECT u.UserId, u.UserCode, u.FullName
+			FROM `User` u
+			WHERE u.IsActive = TRUE AND u.DeletedAt IS NULL AND u.Email = :email
+			LIMIT 1
+			""")
+	List<UserEntity> activeWithEmail(@Param("email") String email);
+
+	@Query(nativeQuery = true, value = """
+			SELECT u.UserId, u.UserCode, u.FullName
+			FROM `User` u
+			WHERE u.IsActive = TRUE AND u.DeletedAt IS NULL AND u.FullName = :fullName
+			ORDER BY u.UserId
+			LIMIT 2
+			""")
+	List<UserEntity> activeNamed(@Param("fullName") String fullName);
+
+	@Query(nativeQuery = true, value = """
 			SELECT COUNT(*)
 			FROM `User` u
 			WHERE u.IsActive = TRUE AND u.DeletedAt IS NULL

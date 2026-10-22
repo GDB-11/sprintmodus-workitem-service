@@ -29,6 +29,7 @@ import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemComment
 import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemUnassigned;
 import com.sprintmodus.workitem_service.domain.model.AssignmentRole;
 import com.sprintmodus.workitem_service.domain.model.ChangeType;
+import com.sprintmodus.workitem_service.domain.model.NotificationType;
 import com.sprintmodus.workitem_service.domain.model.ItemType;
 import com.sprintmodus.workitem_service.domain.model.OrganizationRole;
 import com.sprintmodus.workitem_service.domain.model.WorkItem;
@@ -67,7 +68,7 @@ class AssignmentsCommentsAndWorkflowTest {
 
 	// ------------------------------------------------------------------ assignments
 
-	private final AssignWorkItemUseCase assign = new AssignWorkItemUseCase(items, assignments, audit, transactions, events);
+	private final AssignWorkItemUseCase assign = new AssignWorkItemUseCase(items, assignments, audit, notifications, transactions, events);
 
 	private final UnassignWorkItemUseCase unassign = new UnassignWorkItemUseCase(assignments, audit, transactions, events);
 
@@ -86,6 +87,26 @@ class AssignmentsCommentsAndWorkflowTest {
 			assertThat(entry.additionalData()).containsEntry("userCode", ana.toString()).containsEntry("role", "DEV");
 		});
 		assertThat(transactions.auditSizeAtEnd).containsExactly(1);
+	}
+
+	@Test
+	void notifiesTheAssigneeInTheSameTransactionButNotWhenAssigningOneself() {
+		UUID ana = assignments.addUser("Ana Diaz");
+		users.add(ana, "Ana Diaz", "ana@example.com");
+		users.add(member.userCode(), "Mia Member", "mia@example.com");
+
+		assign.execute(new Assign(member, item.code(), ana, AssignmentRole.DEV));
+		UUID mia = assignments.addUser("Mia Member");
+		assign.execute(new Assign(new Actor(mia, OrganizationRole.MEMBER), item.code(), mia, AssignmentRole.QA));
+
+		assertThat(notifications.of(ana)).singleElement().satisfies(notification -> {
+			assertThat(notification.type()).isEqualTo(NotificationType.ASSIGNED);
+			assertThat(notification.workItemCode()).isEqualTo(item.code());
+			assertThat(notification.commentCode()).isNull();
+			assertThat(notification.actor().userCode()).isEqualTo(member.userCode());
+		});
+		assertThat(notifications.total()).as("assigning oneself notifies nobody").isEqualTo(1);
+		assertThat(notifications.createdInsideTransaction).containsExactly(true);
 	}
 
 	@Test

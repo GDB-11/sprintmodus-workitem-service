@@ -46,7 +46,7 @@ final class ErrorMapper {
 
 	private static HttpStatus status(WorkItemError error) {
 		return switch (error) {
-			case WorkItemError.InvalidWorkItemData _, WorkItemError.InvalidParent _ -> HttpStatus.BAD_REQUEST;
+			case WorkItemError.InvalidWorkItemData _, WorkItemError.InvalidParent _, WorkItemError.EpicCannotHaveParent _ -> HttpStatus.BAD_REQUEST;
 			case WorkItemError.WorkItemNotFound _, WorkItemError.ProjectNotFound _ -> HttpStatus.NOT_FOUND;
 			case WorkItemError.HasChildren _, WorkItemError.WorkflowNotConfigured _ -> HttpStatus.CONFLICT;
 			case WorkItemError.NotAllowed _ -> HttpStatus.FORBIDDEN;

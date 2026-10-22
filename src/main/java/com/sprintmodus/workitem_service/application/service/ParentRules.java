@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import com.sprintmodus.common_lib.result.Result;
 import com.sprintmodus.workitem_service.application.error.WorkItemError;
+import com.sprintmodus.workitem_service.application.error.WorkItemError.EpicCannotHaveParent;
 import com.sprintmodus.workitem_service.application.error.WorkItemError.InvalidParent;
 import com.sprintmodus.workitem_service.application.port.persistence.WorkItemRepository;
 import com.sprintmodus.workitem_service.domain.model.ItemType;
@@ -14,7 +15,7 @@ import com.sprintmodus.workitem_service.domain.model.WorkItem;
 import com.sprintmodus.workitem_service.domain.service.WorkItemHierarchy;
 
 /**
- * What decides whether a work item may have a given parent. The hard rules reject: the parent must exist, be in the same
+ * What decides whether a work item may have a given parent. The hard rules reject: an Epic never has a parent, the parent must exist, be in the same
  * project, and not be the item itself or one of its descendants. The recommended type hierarchy only warns.
  */
 final class ParentRules {
@@ -28,6 +29,9 @@ final class ParentRules {
 	 */
 	static Result<List<Warning>, WorkItemError> check(WorkItemRepository items, ItemType childType, UUID childCode, UUID projectCode,
 			UUID parentCode) {
+		if (childType == ItemType.EPIC) {
+			return Result.failure(new EpicCannotHaveParent());
+		}
 		WorkItem parent = items.findByCode(parentCode).orElse(null);
 		if (parent == null) {
 			return Result.failure(new InvalidParent("The parent work item was not found."));

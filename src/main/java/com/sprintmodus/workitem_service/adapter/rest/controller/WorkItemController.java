@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.sprintmodus.common_lib.security.AuthenticatedUser;
+import com.sprintmodus.workitem_service.adapter.rest.dto.ImportResponses;
 import com.sprintmodus.workitem_service.adapter.rest.dto.Requests;
 import com.sprintmodus.workitem_service.adapter.rest.dto.Responses;
 import com.sprintmodus.workitem_service.adapter.websocket.BoardBroadcaster;
@@ -31,7 +32,10 @@ import com.sprintmodus.workitem_service.application.error.WorkItemError.InvalidW
 import com.sprintmodus.workitem_service.application.service.ChangeWorkItemStatusUseCase;
 import com.sprintmodus.workitem_service.application.service.CreateWorkItemUseCase;
 import com.sprintmodus.workitem_service.application.service.DeleteWorkItemUseCase;
+import com.sprintmodus.workitem_service.application.service.ExportWorkItemUseCase;
 import com.sprintmodus.workitem_service.application.service.GetWorkItemUseCase;
+import com.sprintmodus.workitem_service.application.service.ImportTemplates;
+import com.sprintmodus.workitem_service.application.service.ImportWorkItemsUseCase;
 import com.sprintmodus.workitem_service.application.service.ListWorkItemsUseCase;
 import com.sprintmodus.workitem_service.application.service.MoveToSprintUseCase;
 import com.sprintmodus.workitem_service.application.service.ReorderWorkItemUseCase;
@@ -66,12 +70,18 @@ class WorkItemController {
 
 	private final ReorderWorkItemUseCase reorderWorkItem;
 
+	private final ExportWorkItemUseCase exportWorkItem;
+
+	private final ImportTemplates importTemplates;
+
+	private final ImportWorkItemsUseCase importWorkItems;
+
 	private final BoardBroadcaster board;
 
 	WorkItemController(CreateWorkItemUseCase createWorkItem, ListWorkItemsUseCase listWorkItems, GetWorkItemUseCase getWorkItem,
 			UpdateWorkItemUseCase updateWorkItem, DeleteWorkItemUseCase deleteWorkItem, SetParentUseCase setParent,
 			ChangeWorkItemStatusUseCase changeStatus, MoveToSprintUseCase moveToSprint, ReorderWorkItemUseCase reorderWorkItem,
-			BoardBroadcaster board) {
+			ExportWorkItemUseCase exportWorkItem, ImportTemplates importTemplates, ImportWorkItemsUseCase importWorkItems, BoardBroadcaster board) {
 		this.createWorkItem = createWorkItem;
 		this.listWorkItems = listWorkItems;
 		this.getWorkItem = getWorkItem;
@@ -81,6 +91,9 @@ class WorkItemController {
 		this.changeStatus = changeStatus;
 		this.moveToSprint = moveToSprint;
 		this.reorderWorkItem = reorderWorkItem;
+		this.exportWorkItem = exportWorkItem;
+		this.importTemplates = importTemplates;
+		this.importWorkItems = importWorkItems;
 		this.board = board;
 	}
 
@@ -110,9 +123,55 @@ class WorkItemController {
 				.fold(item -> ResponseEntity.status(HttpStatus.CREATED).body(Responses.WorkItem.from(item)), ErrorMapper::toResponse);
 	}
 
+	/**
+	 * The Markdown template (Spanish) for a file whose roots are {@code root}, or with {@code format=ai-instructions} the
+	 * prompt to paste into an LLM. {@code levels} is how many types the file includes, starting at the root.
+	 */
+	/**
+	 * Creates the work items of a Markdown file ({@code text/markdown} body) under {@code projectCode}, or under
+	 * {@code parentCode} when given, all or nothing. {@code dryRun=true} only previews. The screen decides the type of the
+	 * roots (no parent: Epics). A file with errors creates nothing and answers 400 with the same body as the preview.
+	 */
+	@PostMapping(value = "/import", consumes = { "text/markdown", "text/plain" })
+	ResponseEntity<?> importItems(@AuthenticationPrincipal AuthenticatedUser user, @RequestParam UUID projectCode,
+			@RequestParam(required = false) UUID parentCode, @RequestParam(defaultValue = "false") boolean dryRun, @RequestBody String markdown) {
+		return importWorkItems.execute(new ImportWorkItemsUseCase.Command(Actors.from(user), projectCode, parentCode, markdown, dryRun)).fold(
+				outcome -> ResponseEntity.status(!outcome.dryRun() && outcome.hasErrors() ? HttpStatus.BAD_REQUEST : HttpStatus.OK)
+						.body(ImportResponses.Preview.from(outcome)),
+				ErrorMapper::toResponse);
+	}
+
+	@GetMapping("/import/template")
+	ResponseEntity<?> importTemplate(@RequestParam ItemType root, @RequestParam(defaultValue = "1") int levels,
+			@RequestParam(defaultValue = "template") String format) {
+		var text = "ai-instructions".equals(format) ? importTemplates.aiInstructions(root, levels) : importTemplates.template(root, levels);
+		return text.<ResponseEntity<?>>map(body -> ResponseEntity.ok().contentType(org.springframework.http.MediaType.parseMediaType("text/markdown;charset=UTF-8"))
+				.body(body))
+				.orElseGet(() -> ErrorMapper.toResponse(new InvalidWorkItemData("levels", "There is no template for that combination.")));
+	}
+
 	@GetMapping("/{workItemCode}")
 	ResponseEntity<?> get(@PathVariable UUID workItemCode) {
 		return getWorkItem.execute(workItemCode).fold(item -> ResponseEntity.ok(Responses.WorkItem.from(item)), ErrorMapper::toResponse);
+	}
+
+	/**
+	 * The item and its subtree as Markdown (Spanish). {@code include} is a comma list of {@code children}, {@code links},
+	 * {@code comments} (default: children); {@code depth} limits the levels of children. Never the audit history.
+	 */
+	@GetMapping("/{workItemCode}/export")
+	ResponseEntity<?> export(@PathVariable UUID workItemCode, @RequestParam(defaultValue = "markdown") String format,
+			@RequestParam(defaultValue = "children") String include, @RequestParam(required = false) Integer depth) {
+		if (!"markdown".equals(format)) {
+			return ErrorMapper.toResponse(new InvalidWorkItemData("format", "Only markdown is supported."));
+		}
+		java.util.List<String> parts = java.util.Arrays.stream(include.split(",")).map(String::strip).toList();
+		var options = new ExportWorkItemUseCase.Options(parts.contains("children"), parts.contains("links"), parts.contains("comments"),
+				depth == null || depth < 0 ? null : depth);
+		return exportWorkItem.execute(workItemCode, options).fold(
+				markdown -> ResponseEntity.ok().contentType(org.springframework.http.MediaType.parseMediaType("text/markdown;charset=UTF-8"))
+						.body(markdown),
+				ErrorMapper::toResponse);
 	}
 
 	@PutMapping("/{workItemCode}")

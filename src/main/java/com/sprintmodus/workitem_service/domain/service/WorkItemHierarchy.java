@@ -8,8 +8,8 @@ import com.sprintmodus.common_lib.result.Unit;
 import com.sprintmodus.workitem_service.domain.model.ItemType;
 
 /**
- * The recommended hierarchy: an Epic has no parent, a Feature sits under an Epic, a PBI or Bug under an Epic or a
- * Feature, a Task under a PBI or a Bug. It is <em>recommended, not enforced</em>: a non-standard parent still succeeds,
+ * The recommended hierarchy: an Epic has no parent (a hard rule, enforced by {@code ParentRules}), a Feature sits under an Epic, a PBI or Bug under an Epic or a
+ * Feature, a Task under a PBI or a Bug. Every other pairing is <em>recommended, not enforced</em>: a non-standard parent still succeeds,
  * and the failure this returns is only the warning text to show.
  */
 public final class WorkItemHierarchy {

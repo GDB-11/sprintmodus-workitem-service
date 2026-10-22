@@ -35,6 +35,16 @@ class JpaUserRepository implements UserRepository {
 	}
 
 	@Override
+	public java.util.Optional<UserRef> findByEmail(String email) {
+		return users.activeWithEmail(email.strip()).stream().findFirst().map(JpaUserRepository::toDomain);
+	}
+
+	@Override
+	public List<UserRef> findByFullName(String fullName) {
+		return users.activeNamed(fullName.strip()).stream().map(JpaUserRepository::toDomain).toList();
+	}
+
+	@Override
 	public int countActive() {
 		return users.countActive();
 	}

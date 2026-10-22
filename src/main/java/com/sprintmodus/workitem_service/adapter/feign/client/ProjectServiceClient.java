@@ -29,6 +29,9 @@ public interface ProjectServiceClient {
 	@GetMapping("/api/sprints/{sprintCode}")
 	SprintDto getSprint(@PathVariable("sprintCode") UUID sprintCode);
 
+	@GetMapping("/api/sprints")
+	java.util.List<SprintDto> listSprints(@org.springframework.web.bind.annotation.RequestParam("projectCode") UUID projectCode);
+
 	@PutMapping("/api/sprints/{sprintCode}/velocity")
 	void updateSprintVelocity(@PathVariable("sprintCode") UUID sprintCode, @RequestBody VelocityUpdateRequest request);
 

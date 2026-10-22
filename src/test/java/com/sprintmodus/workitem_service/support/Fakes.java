@@ -371,6 +371,21 @@ public final class Fakes {
 		}
 
 		@Override
+		public List<UUID> findActiveDescendantCodes(UUID code) {
+			List<UUID> found = new java.util.ArrayList<>();
+			List<UUID> level = List.of(code);
+			while (!level.isEmpty()) {
+				List<UUID> next = new java.util.ArrayList<>();
+				for (UUID parent : level) {
+					findChildren(parent).forEach(child -> next.add(child.code()));
+				}
+				found.addAll(next);
+				level = next;
+			}
+			return found;
+		}
+
+		@Override
 		public int countActiveChildren(UUID code) {
 			return findChildren(code).size();
 		}
@@ -602,8 +617,28 @@ public final class Fakes {
 			return code;
 		}
 
+		public final Map<String, UUID> emails = new HashMap<>();
+
+		public void add(UUID code, String fullName, String email) {
+			names.put(code, fullName);
+			emails.put(email.toLowerCase(java.util.Locale.ROOT), code);
+		}
+
 		public void deactivate(UUID code) {
 			inactive.add(code);
+		}
+
+		@Override
+		public java.util.Optional<UserRef> findByEmail(String email) {
+			UUID code = emails.get(email.strip().toLowerCase(java.util.Locale.ROOT));
+			return code == null || inactive.contains(code) ? java.util.Optional.empty() : java.util.Optional.of(new UserRef(code, names.get(code)));
+		}
+
+		@Override
+		public List<UserRef> findByFullName(String fullName) {
+			return names.entrySet().stream().filter(entry -> !inactive.contains(entry.getKey()))
+					.filter(entry -> entry.getValue().equalsIgnoreCase(fullName.strip())).limit(2)
+					.map(entry -> new UserRef(entry.getKey(), entry.getValue())).toList();
 		}
 
 		public String nameOf(UUID code) {
@@ -769,6 +804,14 @@ public final class Fakes {
 			}
 			SprintInfo sprint = sprints.get(sprintCode);
 			return sprint == null ? Result.failure(Failure.NOT_FOUND) : Result.success(sprint);
+		}
+
+		@Override
+		public Result<List<SprintInfo>, Failure> listSprints(UUID projectCode) {
+			if (down) {
+				return Result.failure(Failure.UNAVAILABLE);
+			}
+			return Result.success(sprints.values().stream().filter(sprint -> sprint.projectCode().equals(projectCode)).toList());
 		}
 
 		@Override

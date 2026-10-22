@@ -63,6 +63,21 @@ class ProjectServiceGatewayImpl implements ProjectServiceGateway {
 	}
 
 	@Override
+	public Result<java.util.List<SprintInfo>, Failure> listSprints(UUID projectCode) {
+		try {
+			return Result.success(client.listSprints(projectCode).stream()
+					.map(sprint -> new SprintInfo(sprint.sprintCode(), sprint.projectCode(), sprint.name(), sprint.status())).toList());
+		}
+		catch (FeignException.NotFound e) {
+			return Result.failure(Failure.NOT_FOUND);
+		}
+		catch (RuntimeException e) {
+			log.warn("project-service could not list the sprints of project {}: {}", projectCode, e.getMessage());
+			return Result.failure(Failure.UNAVAILABLE);
+		}
+	}
+
+	@Override
 	public Result<Unit, Failure> updateSprintVelocity(UUID sprintCode, int velocity) {
 		try {
 			client.updateSprintVelocity(sprintCode, new VelocityUpdateRequest(velocity));

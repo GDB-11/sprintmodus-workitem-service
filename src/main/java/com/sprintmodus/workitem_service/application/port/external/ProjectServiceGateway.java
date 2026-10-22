@@ -35,6 +35,9 @@ public interface ProjectServiceGateway {
 
 	Result<SprintInfo, Failure> getSprint(UUID sprintCode);
 
+	/** Every sprint of a project, any state. */
+	Result<java.util.List<SprintInfo>, Failure> listSprints(UUID projectCode);
+
 	/**
 	 * Reports the effort points completed in a sprint. A closed sprint's velocity is frozen: project-service refuses the
 	 * update and this still counts as success, as there is nothing to do.

@@ -89,6 +89,9 @@ public interface WorkItemRepository {
 
 	int countActiveChildren(UUID code);
 
+	/** The active items anywhere below {@code code} (children, their children, ...), shallowest first; not the item itself. */
+	List<UUID> findActiveDescendantCodes(UUID code);
+
 	/** Effort points of the PBIs and Bugs of a sprint that are in a terminal status. */
 	int completedEffortOfSprint(UUID sprintCode);
 

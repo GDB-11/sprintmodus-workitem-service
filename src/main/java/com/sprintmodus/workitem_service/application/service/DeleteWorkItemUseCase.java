@@ -1,5 +1,7 @@
 package com.sprintmodus.workitem_service.application.service;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
@@ -19,8 +21,9 @@ import com.sprintmodus.workitem_service.domain.model.ChangeType;
 import com.sprintmodus.workitem_service.domain.model.WorkItem;
 
 /**
- * Soft-deletes a work item and records {@code DELETED}. The creator, an owner or an admin may; an item that still has
- * children cannot be deleted, so nothing is left hanging under a deleted parent.
+ * Soft-deletes a work item together with everything below it, recording {@code DELETED} for each. The creator, an owner
+ * or an admin may; when the item has descendants, a non-admin must also have created every one of them (they are
+ * deleting other people's work otherwise, which {@link HasChildren} reports).
  */
 @Service
 public class DeleteWorkItemUseCase {
@@ -52,24 +55,35 @@ public class DeleteWorkItemUseCase {
 		if (!actor.canAdminister() && !item.createdBy().userCode().equals(actor.userCode())) {
 			return Result.failure(new NotAllowed());
 		}
-		if (items.countActiveChildren(item.code()) > 0) {
+		// deepest first, so no item is ever deleted while an active child still points at it
+		List<WorkItem> doomed = new ArrayList<>();
+		for (UUID code : items.findActiveDescendantCodes(item.code()).reversed()) {
+			items.findByCode(code).ifPresent(doomed::add);
+		}
+		if (!actor.canAdminister() && doomed.stream().anyMatch(d -> !d.createdBy().userCode().equals(actor.userCode()))) {
 			return Result.failure(new HasChildren());
 		}
+		doomed.add(item);
 
-		boolean deleted = transactions.inTransaction(() -> {
-			if (!items.softDelete(item.code(), actor.userCode())) {
-				return false;
+		List<WorkItem> deleted = transactions.inTransaction(() -> {
+			List<WorkItem> done = new ArrayList<>();
+			for (WorkItem target : doomed) {
+				if (items.softDelete(target.code(), actor.userCode())) {
+					audit.append(new AuditEntry(target.code(), actor.userCode(), ChangeType.DELETED, null, target.title(), null,
+							java.util.Map.of("displayKey", target.displayKey())));
+					done.add(target);
+				}
 			}
-			audit.append(new AuditEntry(item.code(), actor.userCode(), ChangeType.DELETED, null, item.title(), null,
-					java.util.Map.of("displayKey", item.displayKey())));
-			return true;
+			return done;
 		});
-		if (!deleted) {
+		if (deleted.stream().noneMatch(d -> d.code().equals(item.code()))) {
 			return Result.failure(new WorkItemNotFound());
 		}
-		// what the item counted for in its sprint is gone
-		velocity.refresh(item.sprintCode());
-		burndown.record(item.sprintCode());
+		// what the items counted for in their sprints is gone
+		deleted.stream().map(WorkItem::sprintCode).filter(java.util.Objects::nonNull).distinct().forEach(sprint -> {
+			velocity.refresh(sprint);
+			burndown.record(sprint);
+		});
 		return Result.success(Unit.VALUE);
 	}
 

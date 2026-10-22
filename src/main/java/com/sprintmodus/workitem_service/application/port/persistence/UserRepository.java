@@ -19,6 +19,12 @@ public interface UserRepository {
 	/** Active users whose full name, or any word of it, starts with {@code query} (blank matches everyone), by name. */
 	List<UserRef> search(String query, int limit);
 
+	/** The active user with this e-mail address (any case), if there is one. The address itself is never returned. */
+	java.util.Optional<UserRef> findByEmail(String email);
+
+	/** The active users whose full name is exactly this (ignoring case and accents); at most 2, enough to tell it is ambiguous. */
+	List<UserRef> findByFullName(String fullName);
+
 	/** How many active users the caller's tenant has (the plan meter's "usuarios usados"). */
 	int countActive();
 

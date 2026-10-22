@@ -142,6 +142,11 @@ class JpaWorkItemRepository implements WorkItemRepository {
 	}
 
 	@Override
+	public List<UUID> findActiveDescendantCodes(UUID code) {
+		return items.findActiveDescendantCodes(code.toString()).stream().map(UUID::fromString).toList();
+	}
+
+	@Override
 	public int countActiveChildren(UUID code) {
 		return (int) items.countActiveChildren(code.toString());
 	}

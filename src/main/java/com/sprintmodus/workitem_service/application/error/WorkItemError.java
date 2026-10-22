@@ -53,6 +53,22 @@ public sealed interface WorkItemError extends ApplicationError {
 
 	}
 
+	/** An Epic is the top of the hierarchy: it can never be given a parent (a hard rule, unlike the other type pairings). */
+	record EpicCannotHaveParent() implements WorkItemError {
+
+		@Override
+		public String code() {
+			return "EPIC_CANNOT_HAVE_PARENT";
+		}
+
+		@Override
+		public String message() {
+			return "An Epic cannot have a parent.";
+		}
+
+	}
+
+	/** Deleting an item also deletes everything below it, so someone who did not create all of it needs admin rights. */
 	record HasChildren() implements WorkItemError {
 
 		@Override
@@ -62,7 +78,7 @@ public sealed interface WorkItemError extends ApplicationError {
 
 		@Override
 		public String message() {
-			return "This work item has children. Delete or move them first.";
+			return "This work item has children created by other people. Only an owner or an admin can delete it together with them.";
 		}
 
 	}
