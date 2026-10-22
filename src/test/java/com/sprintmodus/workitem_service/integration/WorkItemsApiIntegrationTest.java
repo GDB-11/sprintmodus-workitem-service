@@ -34,6 +34,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 import com.jayway.jsonpath.JsonPath;
 import com.sprintmodus.workitem_service.application.event.TenantEvent;
+import com.sprintmodus.workitem_service.domain.event.DomainEvent.NotificationCreated;
 import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemAssigned;
 import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemCommentAdded;
 import com.sprintmodus.workitem_service.domain.event.DomainEvent.WorkItemStatusChanged;
@@ -729,10 +730,16 @@ class WorkItemsApiIntegrationTest {
 
 		assertThat(listener.events).allSatisfy(event -> assertThat(event.tenantId()).isEqualTo(tenant.id()))
 				.allSatisfy(event -> assertThat(event.occurredAt()).isNotNull());
+		// Assigning someone else also notifies them (ASSIGNED); the notification's code is random, so it is read back and its content pinned
+		NotificationCreated assigned = listener.events.stream().map(TenantEvent::event).filter(NotificationCreated.class::isInstance)
+				.map(NotificationCreated.class::cast).findFirst().orElseThrow();
+		assertThat(assigned).isEqualTo(new NotificationCreated(pbi, owner.user().code(), assigned.notificationCode(), member.user().code(),
+				com.sprintmodus.workitem_service.domain.model.NotificationType.ASSIGNED));
 		assertThat(listener.events).extracting(TenantEvent::event).containsExactly(
 				new WorkItemStatusChanged(pbi, member.user().code(), "NEW", "APPROVED"),
 				new WorkItemCommentAdded(pbi, member.user().code(), UUID.fromString(comment)),
 				new WorkItemAssigned(pbi, owner.user().code(), UUID.fromString(assignment), member.user().code(), com.sprintmodus.workitem_service.domain.model.AssignmentRole.DEV),
+				assigned,
 				new WorkItemUnassigned(pbi, owner.user().code(), UUID.fromString(assignment), member.user().code(), com.sprintmodus.workitem_service.domain.model.AssignmentRole.DEV));
 	}
 
