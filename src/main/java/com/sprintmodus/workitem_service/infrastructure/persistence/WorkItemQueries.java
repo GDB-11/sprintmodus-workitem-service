@@ -61,7 +61,8 @@ interface WorkItemQueries extends Repository<WorkItemEntity, Long> {
 			  AND (:hasAssignee = 0 OR EXISTS (
 			        SELECT 1 FROM WorkItemAssignment a JOIN `User` au ON au.UserId = a.UserId
 			        WHERE a.WorkItemId = w.WorkItemId AND a.IsActive = TRUE AND au.UserCode = UUID_TO_BIN(:assignee)))
-			  AND (:hasText = 0 OR MATCH (w.Title, w.Description) AGAINST (:text IN NATURAL LANGUAGE MODE))
+			  AND (:hasText = 0 OR MATCH (w.Title, w.Description) AGAINST (:text IN NATURAL LANGUAGE MODE)
+			       OR (:hasNumber = 1 AND w.WorkItemNumber = :number))
 			""";
 
 	/**
@@ -88,7 +89,8 @@ interface WorkItemQueries extends Repository<WorkItemEntity, Long> {
 			@Param("type") String type, @Param("hasStatus") int hasStatus, @Param("status") String status,
 			@Param("hasParent") int hasParent, @Param("parent") String parent, @Param("hasPriority") int hasPriority,
 			@Param("priority") String priority, @Param("hasAssignee") int hasAssignee, @Param("assignee") String assignee,
-			@Param("hasText") int hasText, @Param("text") String text, @Param("board") int board, @Param("limit") int limit,
+			@Param("hasText") int hasText, @Param("text") String text, @Param("hasNumber") int hasNumber,
+			@Param("number") long number, @Param("board") int board, @Param("limit") int limit,
 			@Param("offset") int offset);
 
 	@Query(nativeQuery = true, value = "SELECT COUNT(*) " + FROM_ITEM + SEARCH_WHERE)
@@ -97,7 +99,7 @@ interface WorkItemQueries extends Repository<WorkItemEntity, Long> {
 			@Param("hasStatus") int hasStatus, @Param("status") String status, @Param("hasParent") int hasParent,
 			@Param("parent") String parent, @Param("hasPriority") int hasPriority, @Param("priority") String priority,
 			@Param("hasAssignee") int hasAssignee, @Param("assignee") String assignee, @Param("hasText") int hasText,
-			@Param("text") String text);
+			@Param("text") String text, @Param("hasNumber") int hasNumber, @Param("number") long number);
 
 	/**
 	 * Inserts nothing (0 rows) if the project is deleted, the initial status is not active, or the creator is not an active

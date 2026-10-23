@@ -88,11 +88,15 @@ class JpaWorkItemRepository implements WorkItemRepository {
 		String assignee = uuid(filter.assigneeCode());
 		int hasText = filter.text() != null && !filter.text().isBlank() ? 1 : 0;
 		String text = hasText == 1 ? filter.text() : "";
+		// "1006" or "WEB-1006": the work item number matches too, which a full-text match on title/description never would
+		java.util.regex.Matcher numberMatch = java.util.regex.Pattern.compile("^\\s*(?:[A-Za-z0-9]+-)?(\\d{1,18})\\s*$").matcher(text);
+		int hasNumber = numberMatch.matches() ? 1 : 0;
+		long number = hasNumber == 1 ? Long.parseLong(numberMatch.group(1)) : 0;
 
 		long total = items.countSearch(hasProject, project, sprintMode, sprint, hasType, type, hasStatus, status, hasParent, parent,
-				hasPriority, priority, hasAssignee, assignee, hasText, text);
+				hasPriority, priority, hasAssignee, assignee, hasText, text, hasNumber, number);
 		List<WorkItem> found = items.search(hasProject, project, sprintMode, sprint, hasType, type, hasStatus, status, hasParent, parent,
-				hasPriority, priority, hasAssignee, assignee, hasText, text, filter.boardOrder() ? 1 : 0, size, page * size).stream()
+				hasPriority, priority, hasAssignee, assignee, hasText, text, hasNumber, number, filter.boardOrder() ? 1 : 0, size, page * size).stream()
 				.map(JpaWorkItemRepository::toDomain).toList();
 		return new Page(found, total);
 	}

@@ -8,11 +8,16 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
 
-/** Every SQL statement on {@code WorkItemLink} (native queries only). Unlinking deactivates the row. */
+/** Every SQL statement on {@code WorkItemLink} (native queries only). Unlinking deactivates the row. A link read for an item
+ * carries the type as that item sees it: from the target's side the stored type is inverted ({@code BLOCKS} reads {@code IS_BLOCKED_BY}). */
 interface LinkQueries extends Repository<LinkEntity, Long> {
 
 	String SELECT_LINK = """
-			SELECT l.LinkId, l.LinkCode, l.LinkType,
+			SELECT l.LinkId, l.LinkCode,
+			       CASE WHEN sw.WorkItemCode = UUID_TO_BIN(:workItemCode) THEN l.LinkType ELSE CASE l.LinkType
+			            WHEN 'BLOCKS' THEN 'IS_BLOCKED_BY' WHEN 'IS_BLOCKED_BY' THEN 'BLOCKS'
+			            WHEN 'DUPLICATES' THEN 'IS_DUPLICATED_BY' WHEN 'IS_DUPLICATED_BY' THEN 'DUPLICATES'
+			            ELSE l.LinkType END END AS LinkType,
 			       CASE WHEN sw.WorkItemCode = UUID_TO_BIN(:workItemCode) THEN tw.WorkItemCode ELSE sw.WorkItemCode END AS OtherCode
 			FROM WorkItemLink l
 			JOIN WorkItem sw ON sw.WorkItemId = l.SourceItemId

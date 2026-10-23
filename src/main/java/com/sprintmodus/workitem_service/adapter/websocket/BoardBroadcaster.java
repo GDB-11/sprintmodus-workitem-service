@@ -65,6 +65,9 @@ public class BoardBroadcaster {
 		if (item.isSuccess()) {
 			commentAdded(new BoardKey(tenantId, item.getValue().projectCode()), comment);
 		}
+		else {
+			log.warn("Could not find the board of work item {} to broadcast its new comment: {}", workItemCode, item.getError());
+		}
 	}
 
 	void commentAdded(BoardKey board, CommentResponse comment) {

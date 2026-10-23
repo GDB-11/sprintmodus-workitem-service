@@ -288,6 +288,21 @@ class BoardWebSocketIntegrationTest {
 	}
 
 	@Test
+	void aCommentMadeOverRestReachesTheOpenBoardsToo() throws Exception {
+		Tenant tenant = TenantFixtures.newTenant();
+		UUID project = newProject(tenant, "WCR");
+		UUID item = newTask(tenant, tenant.owner(), project, "Comment over REST");
+		Board mia = join(tenant, tenant.member(), project);
+		mia.next();
+
+		rest(tenant, tenant.admin(), "/api/work-items/" + item + "/comments", "{\"content\":\"From REST\"}");
+
+		String event = mia.next();
+		assertThat(type(event)).isEqualTo("COMMENT_ADDED");
+		assertThat((String) JsonPath.read(event, "$.data.comment.content")).isEqualTo("From REST");
+	}
+
+	@Test
 	void reorderingCardsTellsTheOpenBoardsToReloadTheColumn() throws Exception {
 		Tenant tenant = TenantFixtures.newTenant();
 		UUID project = newProject(tenant, "WSO");

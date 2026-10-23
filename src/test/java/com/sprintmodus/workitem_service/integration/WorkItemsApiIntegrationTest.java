@@ -915,6 +915,10 @@ class WorkItemsApiIntegrationTest {
 		send(get("/api/work-items?projectCode=" + project + "&q=login"), owner, null).andExpect(jsonPath("$.total").value(1));
 		send(get("/api/work-items?projectCode=" + project + "&q=nonexistentterm"), owner, null).andExpect(jsonPath("$.total").value(0));
 		send(get("/api/work-items?projectCode=" + project), owner, null).andExpect(jsonPath("$.total").value(3));
+		// the number (1000 is the first) and the display key find an item too
+		send(get("/api/work-items?projectCode=" + project + "&q=1000"), owner, null).andExpect(jsonPath("$.total").value(1))
+				.andExpect(jsonPath("$.items[0].workItemCode").value(checkout.toString()));
+		send(get("/api/work-items?projectCode=" + project + "&q=WAR-1000"), owner, null).andExpect(jsonPath("$.total").value(1));
 	}
 
 	// ---------------------------------------------------------------- workflow administration
@@ -996,7 +1000,7 @@ class WorkItemsApiIntegrationTest {
 
 		send(get("/api/work-items/" + a), owner, null).andExpect(jsonPath("$.links[0].type").value("BLOCKS"))
 				.andExpect(jsonPath("$.links[0].item.workItemCode").value(b.toString()));
-		send(get("/api/work-items/" + b), owner, null).andExpect(jsonPath("$.links[0].type").value("BLOCKS"))
+		send(get("/api/work-items/" + b), owner, null).andExpect(jsonPath("$.links[0].type").value("IS_BLOCKED_BY"))
 				.andExpect(jsonPath("$.links[0].item.workItemCode").value(a.toString()));
 		assertThat(audit(tenant, a)).last().asString().startsWith("LINKED|Link|");
 
