@@ -179,12 +179,16 @@ class WorkItemController {
 			@RequestBody Requests.UpdateWorkItem request) {
 		return updateWorkItem.execute(new UpdateWorkItem(Actors.from(user), workItemCode, request.title(), request.description(),
 				request.acceptanceCriteria(), request.priority(), request.effortPoints(), request.estimatedHours(), request.remainingHours()))
+				.tap(item -> board.itemUpdated(user.tenantId(), item))
 				.fold(item -> ResponseEntity.ok(Responses.WorkItem.from(item)), ErrorMapper::toResponse);
 	}
 
 	@DeleteMapping("/{workItemCode}")
 	ResponseEntity<?> delete(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID workItemCode) {
-		return deleteWorkItem.execute(Actors.from(user), workItemCode).fold(_ -> ResponseEntity.noContent().build(), ErrorMapper::toResponse);
+		var existing = getWorkItem.execute(workItemCode);
+		return deleteWorkItem.execute(Actors.from(user), workItemCode)
+				.tap(_ -> existing.tap(item -> board.itemDeleted(user.tenantId(), item.projectCode(), workItemCode)))
+				.fold(_ -> ResponseEntity.noContent().build(), ErrorMapper::toResponse);
 	}
 
 	/** The response carries a warning if the parent's type is not a recommended one; the change is made regardless. */
@@ -195,12 +199,14 @@ class WorkItemController {
 			return ErrorMapper.toResponse(new InvalidWorkItemData("parentCode", "Choose the parent work item (or DELETE to remove it)."));
 		}
 		return setParent.execute(new SetParent(Actors.from(user), workItemCode, request.parentCode()))
+				.tap(item -> board.itemUpdated(user.tenantId(), item))
 				.fold(item -> ResponseEntity.ok(Responses.WorkItem.from(item)), ErrorMapper::toResponse);
 	}
 
 	@DeleteMapping("/{workItemCode}/parent")
 	ResponseEntity<?> removeParent(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID workItemCode) {
 		return setParent.execute(new SetParent(Actors.from(user), workItemCode, null))
+				.tap(item -> board.itemUpdated(user.tenantId(), item))
 				.fold(item -> ResponseEntity.ok(Responses.WorkItem.from(item)), ErrorMapper::toResponse);
 	}
 
@@ -228,12 +234,14 @@ class WorkItemController {
 			return ErrorMapper.toResponse(new InvalidWorkItemData("sprintCode", "Choose the sprint (or DELETE to move the item to the backlog)."));
 		}
 		return moveToSprint.execute(new MoveToSprint(Actors.from(user), workItemCode, request.sprintCode()))
+				.tap(item -> board.itemUpdated(user.tenantId(), item))
 				.fold(item -> ResponseEntity.ok(Responses.WorkItem.from(item)), ErrorMapper::toResponse);
 	}
 
 	@DeleteMapping("/{workItemCode}/sprint")
 	ResponseEntity<?> moveToBacklog(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID workItemCode) {
 		return moveToSprint.execute(new MoveToSprint(Actors.from(user), workItemCode, null))
+				.tap(item -> board.itemUpdated(user.tenantId(), item))
 				.fold(item -> ResponseEntity.ok(Responses.WorkItem.from(item)), ErrorMapper::toResponse);
 	}
 

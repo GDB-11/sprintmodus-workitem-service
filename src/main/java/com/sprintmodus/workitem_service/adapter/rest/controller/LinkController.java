@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.sprintmodus.workitem_service.adapter.websocket.BoardBroadcaster;
 import com.sprintmodus.common_lib.security.AuthenticatedUser;
 import com.sprintmodus.workitem_service.adapter.rest.dto.Requests;
 import com.sprintmodus.workitem_service.adapter.rest.dto.Responses;
@@ -28,7 +29,10 @@ class LinkController {
 
 	private final RemoveLinkUseCase removeLink;
 
-	LinkController(CreateLinkUseCase createLink, RemoveLinkUseCase removeLink) {
+	private final BoardBroadcaster board;
+
+	LinkController(CreateLinkUseCase createLink, RemoveLinkUseCase removeLink, BoardBroadcaster board) {
+		this.board = board;
 		this.createLink = createLink;
 		this.removeLink = removeLink;
 	}
@@ -37,14 +41,16 @@ class LinkController {
 	ResponseEntity<?> create(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID workItemCode,
 			@RequestBody Requests.Link request) {
 		return createLink.execute(new CreateLink(Actors.from(user), workItemCode, request.targetCode(), request.type()))
+				.tap(_ -> board.itemUpdated(user.tenantId(), workItemCode))
 				.fold(link -> ResponseEntity.status(HttpStatus.CREATED).body(Responses.Link.from(link)), ErrorMapper::toResponse);
 	}
 
 	@DeleteMapping("/{linkCode}")
 	ResponseEntity<?> remove(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID workItemCode,
 			@PathVariable UUID linkCode) {
-		return removeLink.execute(Actors.from(user), workItemCode, linkCode).fold(_ -> ResponseEntity.noContent().build(),
-				ErrorMapper::toResponse);
+		return removeLink.execute(Actors.from(user), workItemCode, linkCode)
+				.tap(_ -> board.itemUpdated(user.tenantId(), workItemCode))
+				.fold(_ -> ResponseEntity.noContent().build(), ErrorMapper::toResponse);
 	}
 
 }

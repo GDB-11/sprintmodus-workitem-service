@@ -15,6 +15,7 @@ import com.sprintmodus.workitem_service.adapter.websocket.BoardMessages.CommentA
 import com.sprintmodus.workitem_service.adapter.websocket.BoardMessages.ErrorData;
 import com.sprintmodus.workitem_service.adapter.websocket.BoardMessages.ItemMovedData;
 import com.sprintmodus.workitem_service.adapter.websocket.BoardMessages.ItemsReorderedData;
+import com.sprintmodus.workitem_service.adapter.websocket.BoardMessages.ItemUpdatedData;
 import com.sprintmodus.workitem_service.adapter.websocket.BoardMessages.PresenceData;
 import com.sprintmodus.workitem_service.adapter.websocket.BoardMessages.StatusChangedData;
 import com.sprintmodus.workitem_service.adapter.websocket.BoardMessages.UserTypingData;
@@ -57,6 +58,27 @@ public class BoardBroadcaster {
 	public void itemsReordered(UUID tenantId, WorkItemResponse item) {
 		publish(new BoardKey(tenantId, item.projectCode()), BoardMessage.ITEMS_REORDERED,
 				new ItemsReorderedData(item.code(), item.displayKey(), Responses.Status.from(item.status())));
+	}
+
+	/** The item changed in a way the other screens cannot tell from a status event: they reload it. */
+	public void itemUpdated(UUID tenantId, WorkItemResponse item) {
+		publish(new BoardKey(tenantId, item.projectCode()), BoardMessage.ITEM_UPDATED, new ItemUpdatedData(item.code(), false));
+	}
+
+	/** For callers that only know the work item: the board is found from it. */
+	public void itemUpdated(UUID tenantId, UUID workItemCode) {
+		var item = getWorkItem.execute(workItemCode);
+		if (item.isSuccess()) {
+			itemUpdated(tenantId, item.getValue());
+		}
+		else {
+			log.warn("Could not find the board of work item {} to broadcast its update: {}", workItemCode, item.getError());
+		}
+	}
+
+	/** The item is already soft-deleted, so the caller passes the project it belonged to. */
+	public void itemDeleted(UUID tenantId, UUID projectCode, UUID workItemCode) {
+		publish(new BoardKey(tenantId, projectCode), BoardMessage.ITEM_UPDATED, new ItemUpdatedData(workItemCode, true));
 	}
 
 	/** For callers that only know the work item (the REST endpoint): the board is found from it. */

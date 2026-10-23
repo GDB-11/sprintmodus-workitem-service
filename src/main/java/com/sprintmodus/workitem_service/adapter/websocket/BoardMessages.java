@@ -27,6 +27,8 @@ public final class BoardMessages {
 
 		public static final String ITEMS_REORDERED = "ITEMS_REORDERED";
 
+		public static final String ITEM_UPDATED = "ITEM_UPDATED";
+
 		public static final String USER_TYPING = "USER_TYPING";
 
 		public static final String USER_CONNECTED = "USER_CONNECTED";
@@ -65,6 +67,10 @@ public final class BoardMessages {
 
 	/** Some cards of a column were put in another order; clients reload the column (the new order is not in the message). */
 	public record ItemsReorderedData(UUID workItemCode, String displayKey, Responses.Status status) {
+	}
+
+	/** Something about the work item changed (fields, sprint, parent, assignees, links) or it was deleted; clients reload it. */
+	public record ItemUpdatedData(UUID workItemCode, boolean deleted) {
 	}
 
 	public record CommentAddedData(UUID workItemCode, Responses.Comment comment) {

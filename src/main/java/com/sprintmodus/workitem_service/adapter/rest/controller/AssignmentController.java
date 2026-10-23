@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.sprintmodus.workitem_service.adapter.websocket.BoardBroadcaster;
 import com.sprintmodus.common_lib.security.AuthenticatedUser;
 import com.sprintmodus.workitem_service.adapter.rest.dto.Requests;
 import com.sprintmodus.workitem_service.adapter.rest.dto.Responses;
@@ -28,7 +29,10 @@ class AssignmentController {
 
 	private final UnassignWorkItemUseCase unassign;
 
-	AssignmentController(AssignWorkItemUseCase assign, UnassignWorkItemUseCase unassign) {
+	private final BoardBroadcaster board;
+
+	AssignmentController(AssignWorkItemUseCase assign, UnassignWorkItemUseCase unassign, BoardBroadcaster board) {
+		this.board = board;
 		this.assign = assign;
 		this.unassign = unassign;
 	}
@@ -37,14 +41,16 @@ class AssignmentController {
 	ResponseEntity<?> assign(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID workItemCode,
 			@RequestBody Requests.Assignment request) {
 		return assign.execute(new Assign(Actors.from(user), workItemCode, request.userCode(), request.role()))
+				.tap(_ -> board.itemUpdated(user.tenantId(), workItemCode))
 				.fold(assignee -> ResponseEntity.status(HttpStatus.CREATED).body(Responses.Assignee.from(assignee)), ErrorMapper::toResponse);
 	}
 
 	@DeleteMapping("/{assignmentCode}")
 	ResponseEntity<?> unassign(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID workItemCode,
 			@PathVariable UUID assignmentCode) {
-		return unassign.execute(Actors.from(user), workItemCode, assignmentCode).fold(_ -> ResponseEntity.noContent().build(),
-				ErrorMapper::toResponse);
+		return unassign.execute(Actors.from(user), workItemCode, assignmentCode)
+				.tap(_ -> board.itemUpdated(user.tenantId(), workItemCode))
+				.fold(_ -> ResponseEntity.noContent().build(), ErrorMapper::toResponse);
 	}
 
 }
